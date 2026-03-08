@@ -1,0 +1,310 @@
+---
+description: Usalp Agent modülü — Python sunucu izleme servisi
+globs: agent/**/*.py, agent/**/*.yaml, agent/**/*.yml
+---
+
+# Agent Modülü
+
+Agent, izlenen hedef sunucuda sürekli çalışan hafif bir Python servis sürecidir.
+Metrik toplar, servis durumlarını kontrol eder, log kuyruğunu okur ve tüm veriyi
+Backend API'ye HTTP ile gönderir.
+
+---
+
+## Teknoloji Stack
+
+```
+Python          3.12+
+psutil          6.x       # Sistem metrik toplama
+PyYAML          6.x       # Konfigürasyon okuma
+httpx           0.27+     # Async HTTP istemci (requests yerine)
+pydantic        2.x       # Veri doğrulama ve serialization
+structlog       24.x      # Yapılandırılmış loglama
+tenacity        9.x       # Retry dekoratörleri
+```
+
+> **Neden httpx?** `requests` senkron, `httpx` hem sync hem async destekler.
+> MVP'de sync yeterli ama ilerisi için geçiş maliyeti sıfır.
+
+---
+
+## Dizin Yapısı
+
+```
+agent/
+├── main.py              # Giriş noktası, scheduler loop
+├── agent.yaml           # Örnek konfigürasyon
+├── config.py            # YAML parse + Pydantic model
+├── collectors/
+│   ├── __init__.py
+│   ├── cpu.py           # CPU metrikleri
+│   ├── memory.py        # RAM ve swap
+│   ├── disk.py          # Disk kullanımı ve I/O
+│   ├── network.py       # Network trafiği
+│   ├── process.py       # Top-N process
+│   └── services.py      # systemd servis durumları
+├── readers/
+│   ├── __init__.py
+│   └── log_reader.py    # Log dosyası tail + pattern filtre
+├── sender/
+│   ├── __init__.py
+│   └── http_sender.py   # Backend'e HTTP POST
+├── models.py            # Pydantic payload modelleri
+└── tests/
+    ├── test_collectors.py
+    ├── test_log_reader.py
+    └── test_sender.py
+```
+
+---
+
+## Konfigürasyon Şeması (`agent.yaml`)
+
+```yaml
+server_id: web-server-01          # Unique, backend'de kayıtlı olmalı
+backend_url: http://localhost:8000
+api_key: usalp-agent-xxx          # Backend'deki AGENT_API_KEY ile eşleşmeli
+
+intervals:
+  fast: 30      # saniye — CPU, RAM, Network
+  slow: 60      # saniye — Disk, Process listesi
+
+services:
+  - nginx
+  - docker
+  - postgresql
+  - redis
+
+log_files:
+  - path: /var/log/nginx/error.log
+    tail_lines: 100
+    min_level: ERROR              # DEBUG|INFO|WARNING|ERROR|CRITICAL
+  - path: /var/log/syslog
+    tail_lines: 50
+    min_level: WARNING
+```
+
+---
+
+## Pydantic Payload Modelleri (`models.py`)
+
+```python
+from pydantic import BaseModel, Field
+from datetime import datetime
+from typing import Optional
+
+class CpuMetrics(BaseModel):
+    percent: float
+    per_core: list[float]
+    load_avg_1: float
+    load_avg_5: float
+    load_avg_15: float
+
+class MemoryMetrics(BaseModel):
+    total_bytes: int
+    used_bytes: int
+    available_bytes: int
+    percent: float
+    swap_total_bytes: int
+    swap_used_bytes: int
+
+class DiskMetrics(BaseModel):
+    path: str
+    total_bytes: int
+    used_bytes: int
+    free_bytes: int
+    percent: float
+    read_bytes_per_sec: float
+    write_bytes_per_sec: float
+
+class NetworkMetrics(BaseModel):
+    interface: str
+    bytes_sent_per_sec: float
+    bytes_recv_per_sec: float
+    packets_sent_per_sec: float
+    packets_recv_per_sec: float
+    errors_in: int
+    errors_out: int
+
+class ProcessInfo(BaseModel):
+    pid: int
+    name: str
+    cpu_percent: float
+    memory_percent: float
+    status: str
+
+class ServiceStatus(BaseModel):
+    name: str
+    status: str       # "active", "inactive", "failed", "activating", "deactivating"
+    sub_state: str    # "running", "dead", "exited" vb.
+    since_seconds: Optional[int] = None   # Bu durumda kaç saniyedir
+
+class LogEntry(BaseModel):
+    source_file: str
+    level: str        # "ERROR", "CRITICAL", "WARNING" vb.
+    message: str
+    raw_line: str
+    logged_at: datetime
+
+class MetricPayload(BaseModel):
+    server_id: str
+    collected_at: datetime = Field(default_factory=datetime.utcnow)
+    cpu: CpuMetrics
+    memory: MemoryMetrics
+    disks: list[DiskMetrics]
+    networks: list[NetworkMetrics]
+    top_processes: list[ProcessInfo]
+    services: list[ServiceStatus]
+    log_entries: list[LogEntry]
+```
+
+---
+
+## Metrik Toplama Kuralları
+
+### CPU (`collectors/cpu.py`)
+- `psutil.cpu_percent(interval=1)` kullan, `interval=None` kullanma (inaccurate)
+- `psutil.cpu_percent(percpu=True)` ile çekirdek bazında da topla
+- `psutil.getloadavg()` ile 1/5/15 dk load average al
+- Sonucu `CpuMetrics` modeline map et, doğrudan dict döndürme
+
+### Memory (`collectors/memory.py`)
+- `psutil.virtual_memory()` ve `psutil.swap_memory()` kullan
+- Değerleri byte olarak sakla, yüzde frontend'de hesaplanabilir ama `percent` fieldı da doldur
+- Cache değerini ayrı field olarak sakla (RAM analizi için önemli)
+
+### Disk (`collectors/disk.py`)
+- `psutil.disk_partitions()` ile tüm mount point'leri bul
+- `tmpfs`, `devtmpfs`, `squashfs` gibi sanal dosya sistemlerini **filtrele**
+- `psutil.disk_io_counters(perdisk=True)` ile I/O oku
+- I/O değerlerini rate hesapla: önceki ölçümü sakla, delta / interval yap
+
+### Network (`collectors/network.py`)
+- `psutil.net_io_counters(pernic=True)` kullan
+- `lo` (loopback) interface'ini **filtrele**
+- Bir önceki ölçümü modül seviyesinde sakla, byte/sec hesapla
+- `bytes_recv` ve `bytes_sent` ham sayaçtır, rate için delta gerekir
+
+### Process (`collectors/process.py`)
+- `psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent', 'status'])` kullan
+- CPU yüzdesi ilk çağrıda 0.0 döner (psutil özelliği); iki ölçüm arası hesap gerekir
+- CPU'ya göre sort et, top 10 döndür
+- `NoSuchProcess` ve `AccessDenied` exception'larını sessizce yakala, process'i atla
+
+### Servisler (`collectors/services.py`)
+- `systemctl is-active <service>` ve `systemctl show <service>` kombinasyonu kullan
+- `subprocess.run()` ile çalıştır, timeout=5 koy
+- `ActiveState` ve `SubState` değerlerini oku
+- `ActiveEnterTimestamp` ile "bu durumda kaç saniyedir" hesapla
+- Servis listesi YAML config'den gelir, hardcode etme
+
+---
+
+## Log Okuma Kuralları (`readers/log_reader.py`)
+
+```python
+# Doğru pattern listesi
+ERROR_PATTERNS = [
+    r'\bERROR\b', r'\bCRITICAL\b', r'\bFATAL\b',
+    r'\bException\b', r'\bTraceback\b', r'\bPanic\b',
+    r'\[error\]', r'\[crit\]',       # nginx formatı
+    r'SQLSTATE',                      # PostgreSQL
+    r'OOM',                           # Out of memory
+]
+```
+
+- `tail_lines` kadar satırı oku; tüm dosyayı okuma
+- Dosya yoksa veya okuma izni yoksa `WARNING` log at, exception fırlatma
+- Her satır için timestamp parse etmeye çalış; başaramazsan `logged_at = now()`
+- Log level'ı raw satırdan regex ile çıkar
+- Tek bir log gönderiminde max 200 satır gönder (payload boyutunu kontrol et)
+- Binary dosyaları `UnicodeDecodeError` ile yakala, atla
+
+---
+
+## HTTP Sender (`sender/http_sender.py`)
+
+```python
+import httpx
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+def send_metrics(payload: MetricPayload, config: AgentConfig) -> bool:
+    """Metrikleri Backend API'ye gönderir. Başarısızlıkta 3 kez retry yapar."""
+    ...
+```
+
+- Header: `Authorization: Bearer <api_key>` ve `Content-Type: application/json`
+- Timeout: connect=5s, read=10s
+- 2xx → başarılı
+- 4xx → retry **yapma** (client hatası, log at)
+- 5xx veya network error → retry yap (tenacity)
+- Başarısız gönderimde veriyi **drop et** (MVP — buffer yok, TODO(v2): local SQLite buffer)
+- Payload `model.model_dump_json()` ile serialize et (Pydantic v2)
+
+---
+
+## Ana Döngü (`main.py`)
+
+```python
+import asyncio
+import schedule
+import time
+
+def fast_cycle():
+    """30 saniyede bir: CPU, RAM, Network, Servis, Log"""
+    ...
+
+def slow_cycle():
+    """60 saniyede bir: Disk, Process listesi"""
+    ...
+
+if __name__ == "__main__":
+    schedule.every(config.intervals.fast).seconds.do(fast_cycle)
+    schedule.every(config.intervals.slow).seconds.do(slow_cycle)
+    
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+```
+
+- `schedule` kütüphanesi kullan (sade, yeterli)
+- Her cycle başında yeni bir payload oluştur; state tutma (I/O rate hariç)
+- `structlog` ile her gönderim sonucunu logla
+- Unhandled exception döngüyü durdurmasın; `try/except` ile yakala ve logla
+
+---
+
+## Loglama Standardı
+
+```python
+import structlog
+log = structlog.get_logger()
+
+# Doğru kullanım
+log.info("metrics_sent", server_id=server_id, entries=len(payload.log_entries))
+log.error("send_failed", server_id=server_id, status_code=resp.status_code)
+
+# Yanlış kullanım
+print(f"Sent metrics for {server_id}")  # print kullanma
+logging.info("metrics sent")            # stdlib logging kullanma
+```
+
+---
+
+## Test Kuralları
+
+- `collectors/` testleri gerçek sistem çağrısı yapar (unit test ama live)
+- `sender/` testlerinde `httpx.MockTransport` veya `respx` kullan
+- `pytest-mock` ile `subprocess.run` mock'la (servis testleri için)
+- Her collector için en az 1 test: output tipini ve zorunlu field'ları doğrula
+- Test dosyaları `agent/tests/` altında, `conftest.py` ile ortak fixture'lar
+
+---
+
+## Performans Kısıtları
+
+- Agent başlatıldıktan 30 saniye sonra CPU kullanımı **< %2** olmalı
+- RAM tüketimi **< 50 MB** olmalı
+- Her metrik toplama cycle'ı **< 5 saniye** sürmeli
+- Eğer bir collector 5 saniyeden uzun sürerse timeout ile kes ve logla

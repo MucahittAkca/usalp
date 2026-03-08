@@ -1,0 +1,169 @@
+---
+description: Usalp genel proje bağlamı — her zaman aktif
+alwaysApply: true
+---
+
+# Usalp — AI Destekli Sunucu İzleme ve Log Analiz Platformu
+
+## Proje Kimliği
+Usalp, Linux tabanlı sunucuların metriklerini izleyen, servis durumlarını takip eden ve hata loglarını
+yapay zeka ile yorumlayan bir altyapı izleme platformudur. Bitirme projesi kapsamında MVP odaklı
+geliştirilmektedir.
+
+**Temel fark:** Mevcut araçlar veriyi gösterir. Usalp veriyi yorumlar.
+
+---
+
+## Sistem Mimarisi
+
+```
+[Hedef Sunucu]          [Merkezi Sistem]              [Kullanıcı]
+     │                        │                            │
+  Agent (Python)  ──POST──▶  Backend API (FastAPI)  ◀── Dashboard (Next.js)
+  psutil / systemd            │         │                  │
+  log tail                PostgreSQL  Claude API           │
+                              │                            │
+                           Alarm Motoru ──────────────────▶│
+```
+
+## Bileşenler
+
+| Bileşen     | Teknoloji              | Port  | Konum          |
+|-------------|------------------------|-------|----------------|
+| Agent       | Python 3.12 + psutil   | —     | Hedef sunucu   |
+| Backend API | FastAPI + PostgreSQL    | 8000  | Merkezi sunucu |
+| Dashboard   | Next.js 14 + React     | 3000  | Web arayüzü    |
+| AI Layer    | Anthropic Claude API   | —     | Backend içinde |
+| Proxy       | Nginx                  | 80/443| Reverse proxy  |
+
+---
+
+## Veri Akışı (Tam)
+
+1. **Agent** → 30s/60s aralıklarla metrik toplar → JSON olarak sıkıştırır
+2. **Agent** → `POST /api/v1/metrics` ile Backend'e gönderir (API key ile auth)
+3. **Backend** → Veriyi PostgreSQL'e yazar → Eşik kurallarını kontrol eder
+4. **Backend** → Kritik log veya eşik aşımında Alert üretir
+5. **Backend** → Kritik alert oluştuğunda AI analizi tetikler
+6. **Claude API** → Structured JSON analiz döndürür
+7. **Dashboard** → Polling ile güncel veriyi çeker ve görselleştirir
+
+---
+
+## API Sözleşmesi
+
+### Tüm Endpoint'ler
+
+```
+POST   /api/v1/metrics                    # Agent metrik gönderimi
+GET    /api/v1/servers                    # Sunucu listesi
+GET    /api/v1/servers/{server_id}        # Sunucu detayı
+GET    /api/v1/servers/{server_id}/metrics   # Metrikler (filtreli)
+GET    /api/v1/servers/{server_id}/services  # Servis durumları
+GET    /api/v1/servers/{server_id}/logs      # Log kayıtları
+GET    /api/v1/alerts                        # Alert listesi
+PATCH  /api/v1/alerts/{alert_id}/resolve    # Alert kapat
+POST   /api/v1/ai/analyze                   # Manuel AI analizi tetikle
+GET    /api/v1/ai/analyses/{server_id}      # Geçmiş analizler
+```
+
+### Standart Yanıt Formatı
+
+```json
+// Başarılı
+{ "data": {...}, "meta": { "timestamp": "ISO8601" } }
+
+// Hata
+{ "error": { "code": "THRESHOLD_EXCEEDED", "message": "...", "details": {} } }
+
+// Sayfalı liste
+{ "data": [...], "meta": { "total": 100, "page": 1, "per_page": 20 } }
+```
+
+---
+
+## AI Analiz Çıktı Şeması (Canonical)
+
+```json
+{
+  "severity": "low | medium | high | critical",
+  "category": "network_error | disk_issue | permission_issue | config_error | dependency_failure | resource_exhaustion",
+  "summary": "Kısa, Türkçe açıklama (1-2 cümle)",
+  "likely_causes": [
+    "Olası neden 1",
+    "Olası neden 2",
+    "Olası neden 3"
+  ],
+  "suggested_commands": [
+    { "command": "systemctl status nginx", "description": "Servis durumunu kontrol et" }
+  ],
+  "confidence": 0.82
+}
+```
+
+---
+
+## Veritabanı Şeması (Özet)
+
+```sql
+servers          (id, name, hostname, ip_address, api_key, status, created_at)
+metrics          (id, server_id, cpu_percent, ram_percent, disk_percent, 
+                  network_in_bytes, network_out_bytes, load_avg_1, 
+                  load_avg_5, load_avg_15, recorded_at)
+service_statuses (id, server_id, service_name, status, checked_at)
+log_entries      (id, server_id, source_file, level, message, raw_line, logged_at)
+alerts           (id, server_id, type, severity, message, resolved_at, created_at)
+ai_analyses      (id, alert_id, server_id, category, severity, summary, 
+                  causes, commands, confidence, created_at)
+```
+
+---
+
+## Ortam Değişkenleri
+
+```env
+DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/usalp
+LLM_API_KEY=sk-ant-...           # Anthropic Claude API
+AGENT_API_KEY=ualsp-agent-...    # Agent kimlik doğrulama
+SECRET_KEY=...                   # JWT imzalama
+ENVIRONMENT=development|production
+```
+
+---
+
+## Alarm Eşikleri (Varsayılan)
+
+| Metrik     | Uyarı  | Kritik |
+|------------|--------|--------|
+| CPU        | %80    | %90    |
+| RAM        | %85    | %95    |
+| Disk       | %85    | %95    |
+| Servis     | inactive | failed |
+
+---
+
+## Kod Kalitesi Standartları
+
+- **Python**: Ruff linter, Black formatter, tip annotasyonu zorunlu (`str`, `int`, `Optional[X]`)
+- **TypeScript**: strict mode aktif, `any` tipi yasak
+- **Test**: Backend için pytest, Frontend için Vitest
+- **Docstring**: Her public fonksiyon için zorunlu
+- **Commit**: Conventional commits (`feat:`, `fix:`, `docs:`, `test:`)
+
+## Güvenlik Kuralları (Global)
+
+- Secret/credential hiçbir zaman kaynak kodda bulunmaz
+- Tüm environment variable `.env` dosyasından okunur
+- Log mesajlarında `password=`, `token=`, `key=`, `secret=` pattern'ları maskelenir
+- Kullanıcı girdileri her katmanda validate edilir
+
+## MVP Kapsam Sınırı
+
+Bu sürümde **kesinlikle yer almayan** özellikler:
+- Çoklu kullanıcı / role-based access control
+- E-posta / Telegram bildirimleri
+- Agent tarafında local buffer ve retry kuyruğu
+- Korelasyon motoru / timeline view
+- Gerçek zamanlı WebSocket push (polling yeterli)
+
+MVP sonrasına bırakılan her şeyi `# TODO(v2):` yorumuyla işaretle.

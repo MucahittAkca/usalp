@@ -1,0 +1,31 @@
+[project]
+name = "usalp-agent"
+version = "0.1.0"
+description = "Usalp sunucu izleme ajanı — metrik, servis ve log toplayıcı"
+requires-python = ">=3.12"
+dependencies = [
+    "psutil>=6.0.0",
+    "httpx>=0.27.0",
+    "pyyaml>=6.0.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6.0",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[project.scripts]
+usalp-agent = "main:main"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "A", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

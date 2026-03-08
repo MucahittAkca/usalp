@@ -1,0 +1,467 @@
+---
+description: Usalp Dashboard — Next.js 14 + React web arayüzü
+globs: dashboard/**/*.tsx, dashboard/**/*.ts, dashboard/**/*.css
+---
+
+# Dashboard Modülü
+
+Next.js 14 App Router ile yazılmış web arayüzü. Sunucu metriklerini görselleştirir,
+servis durumlarını takip eder, alarm merkezini ve AI analiz panelini sunar.
+
+---
+
+## Teknoloji Stack
+
+```
+Next.js         14.x (App Router)
+React           18.x
+TypeScript      5.x (strict mode)
+Tailwind CSS    3.x
+shadcn/ui       latest    # Temel UI bileşenleri
+Recharts        2.x       # Grafik bileşenleri
+SWR             2.x       # Data fetching + polling
+Zustand         4.x       # Global state (minimal)
+date-fns        3.x       # Tarih formatlama
+lucide-react    latest    # İkonlar
+```
+
+> **Neden SWR?** Built-in polling (`refreshInterval`), loading/error state,
+> revalidation ve cache — React Query'den daha hafif, MVP için yeterli.
+
+---
+
+## Dizin Yapısı
+
+```
+dashboard/
+├── app/
+│   ├── layout.tsx              # Root layout, font, theme provider
+│   ├── page.tsx                # / → Sunucu Genel Bakış
+│   ├── login/
+│   │   └── page.tsx            # /login
+│   ├── servers/
+│   │   └── [id]/
+│   │       ├── page.tsx        # /servers/[id] → Detay sayfası
+│   │       ├── logs/
+│   │       │   └── page.tsx    # /servers/[id]/logs
+│   │       └── ai/
+│   │           └── page.tsx    # /servers/[id]/ai → AI analiz paneli
+│   └── alerts/
+│       └── page.tsx            # /alerts → Alarm merkezi
+│
+├── components/
+│   ├── ui/                     # shadcn/ui bileşenleri (dokunma)
+│   ├── layout/
+│   │   ├── Sidebar.tsx
+│   │   ├── Header.tsx
+│   │   └── AppShell.tsx
+│   ├── servers/
+│   │   ├── ServerCard.tsx      # Genel bakış sayfası kartı
+│   │   ├── ServerStatusBadge.tsx
+│   │   └── ServerList.tsx
+│   ├── metrics/
+│   │   ├── MetricGauge.tsx     # Dairesel gösterge (CPU/RAM/Disk)
+│   │   ├── MetricChart.tsx     # Zaman serisi grafik
+│   │   ├── MetricGrid.tsx      # 2x2 veya 2x3 metrik layout
+│   │   └── NetworkChart.tsx    # Gelen/giden trafik
+│   ├── services/
+│   │   ├── ServiceList.tsx
+│   │   └── ServiceStatusBadge.tsx
+│   ├── logs/
+│   │   ├── LogViewer.tsx       # Sanal scroll, renk kodlamalı
+│   │   ├── LogEntry.tsx
+│   │   └── LogFilter.tsx
+│   ├── alerts/
+│   │   ├── AlertList.tsx
+│   │   ├── AlertCard.tsx
+│   │   └── AlertBadge.tsx
+│   └── ai/
+│       ├── AnalysisPanel.tsx   # Ana AI analiz bileşeni
+│       ├── CommandBlock.tsx    # Öneri komutları (kopyala butonu)
+│       ├── CauseList.tsx
+│       └── ConfidenceBar.tsx
+│
+├── hooks/
+│   ├── useServerMetrics.ts     # SWR wrapper
+│   ├── useServerList.ts
+│   ├── useAlerts.ts
+│   └── useAiAnalysis.ts
+│
+├── lib/
+│   ├── api.ts                  # Tüm API çağrıları buradan
+│   ├── auth.ts                 # Token saklama + header
+│   └── utils.ts                # cn(), formatBytes(), formatDuration()
+│
+├── types/
+│   └── api.ts                  # API response tipleri
+│
+└── tests/
+    ├── components/
+    └── hooks/
+```
+
+---
+
+## TypeScript Tipleri (`types/api.ts`)
+
+```typescript
+// API'den gelen tüm tipler burada tanımlı
+// Backend Pydantic şemalarıyla 1:1 eşleşmeli
+
+export type Severity = "low" | "medium" | "high" | "critical";
+export type ServerStatus = "online" | "offline" | "warning";
+export type ServiceStatus = "active" | "inactive" | "failed" | "activating" | "deactivating";
+export type AlertType = "cpu_threshold" | "ram_threshold" | "disk_threshold" | "service_failed" | "log_critical";
+export type ErrorCategory =
+  | "network_error" | "disk_issue" | "permission_issue"
+  | "config_error" | "dependency_failure" | "resource_exhaustion";
+
+export interface Server {
+  id: number;
+  name: string;
+  hostname: string;
+  ip_address: string;
+  status: ServerStatus;
+  created_at: string;
+}
+
+export interface Metric {
+  id: number;
+  server_id: number;
+  cpu_percent: number;
+  ram_percent: number;
+  disk_percent: number;
+  network_in_bytes: number;
+  network_out_bytes: number;
+  load_avg_1: number;
+  load_avg_5: number;
+  load_avg_15: number;
+  recorded_at: string;
+}
+
+export interface Service {
+  name: string;
+  status: ServiceStatus;
+  sub_state: string;
+  since_seconds: number | null;
+}
+
+export interface LogEntry {
+  id: number;
+  source_file: string;
+  level: string;
+  message: string;
+  raw_line: string;
+  logged_at: string;
+}
+
+export interface Alert {
+  id: number;
+  server_id: number;
+  type: AlertType;
+  severity: Severity;
+  message: string;
+  resolved_at: string | null;
+  created_at: string;
+}
+
+export interface AiAnalysis {
+  id: number;
+  alert_id: number | null;
+  server_id: number;
+  category: ErrorCategory;
+  severity: Severity;
+  summary: string;
+  likely_causes: string[];
+  suggested_commands: Array<{ command: string; description: string }>;
+  confidence: number;
+  created_at: string;
+}
+
+// API response wrapper
+export interface ApiResponse<T> {
+  data: T;
+  meta: { timestamp: string };
+}
+
+export interface PaginatedResponse<T> {
+  data: T[];
+  meta: { total: number; page: number; per_page: number };
+}
+```
+
+---
+
+## API Katmanı (`lib/api.ts`)
+
+```typescript
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+
+async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = getToken(); // lib/auth.ts
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options?.headers,
+    },
+  });
+
+  if (res.status === 401) {
+    clearToken();
+    window.location.href = "/login";
+    throw new Error("Unauthorized");
+  }
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(error?.error?.message ?? `HTTP ${res.status}`);
+  }
+
+  return res.json();
+}
+
+// Tüm endpoint'ler burada
+export const api = {
+  servers: {
+    list: () => apiFetch<PaginatedResponse<Server>>("/servers"),
+    get: (id: number) => apiFetch<ApiResponse<Server>>(`/servers/${id}`),
+    metrics: (id: number, from?: string, to?: string) =>
+      apiFetch<PaginatedResponse<Metric>>(
+        `/servers/${id}/metrics?${new URLSearchParams({ ...(from && { from_dt: from }), ...(to && { to_dt: to }) })}`
+      ),
+    services: (id: number) => apiFetch<ApiResponse<Service[]>>(`/servers/${id}/services`),
+    logs: (id: number, level?: string) =>
+      apiFetch<PaginatedResponse<LogEntry>>(`/servers/${id}/logs${level ? `?level=${level}` : ""}`),
+  },
+  alerts: {
+    list: () => apiFetch<PaginatedResponse<Alert>>("/alerts"),
+    resolve: (id: number) =>
+      apiFetch<ApiResponse<Alert>>(`/alerts/${id}/resolve`, { method: "PATCH" }),
+  },
+  ai: {
+    analyze: (serverId: number) =>
+      apiFetch<ApiResponse<AiAnalysis>>("/ai/analyze", {
+        method: "POST",
+        body: JSON.stringify({ server_id: serverId }),
+      }),
+    analyses: (serverId: number) =>
+      apiFetch<PaginatedResponse<AiAnalysis>>(`/ai/analyses/${serverId}`),
+  },
+};
+```
+
+---
+
+## SWR Hook'ları (`hooks/`)
+
+```typescript
+// hooks/useServerMetrics.ts
+import useSWR from "swr";
+import { api } from "@/lib/api";
+
+export function useServerMetrics(serverId: number) {
+  const { data, error, isLoading } = useSWR(
+    serverId ? `metrics-${serverId}` : null,
+    () => api.servers.metrics(serverId),
+    {
+      refreshInterval: 30_000,      // 30 saniyede bir yenile
+      revalidateOnFocus: true,
+      dedupingInterval: 5_000,
+    }
+  );
+  return { metrics: data?.data ?? [], error, isLoading };
+}
+
+// hooks/useAlerts.ts — Alarm sayısı badge için global state
+export function useAlerts() {
+  const { data, error, isLoading, mutate } = useSWR(
+    "alerts",
+    () => api.alerts.list(),
+    { refreshInterval: 15_000 }     // Alert'ler daha sık yenilenir
+  );
+  return {
+    alerts: data?.data ?? [],
+    activeCount: data?.data.filter(a => !a.resolved_at).length ?? 0,
+    error,
+    isLoading,
+    mutate,
+  };
+}
+```
+
+---
+
+## Renk ve Durum Sistemi
+
+```typescript
+// lib/utils.ts — Severity ve status renkler tutarlı olmalı
+
+export const SEVERITY_COLORS = {
+  low:      "text-blue-600 bg-blue-50 border-blue-200",
+  medium:   "text-yellow-600 bg-yellow-50 border-yellow-200",
+  high:     "text-orange-600 bg-orange-50 border-orange-200",
+  critical: "text-red-600 bg-red-50 border-red-200",
+} as const;
+
+export const SERVICE_STATUS_COLORS = {
+  active:       "text-green-700 bg-green-100",
+  inactive:     "text-yellow-700 bg-yellow-100",
+  failed:       "text-red-700 bg-red-100",
+  activating:   "text-blue-700 bg-blue-100",
+  deactivating: "text-gray-700 bg-gray-100",
+} as const;
+
+export const LOG_LEVEL_COLORS = {
+  ERROR:    "text-red-600",
+  CRITICAL: "text-red-800 font-bold",
+  WARNING:  "text-yellow-600",
+  INFO:     "text-gray-600",
+  DEBUG:    "text-gray-400",
+} as const;
+```
+
+---
+
+## Grafik Bileşeni Kuralları
+
+### MetricChart (Recharts)
+```tsx
+// CPU/RAM/Disk zaman serisi — her zaman bu yapıyı kullan
+<ResponsiveContainer width="100%" height={200}>
+  <AreaChart data={metrics}>
+    <defs>
+      <linearGradient id="colorCpu" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
+        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+      </linearGradient>
+    </defs>
+    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+    <XAxis dataKey="recorded_at" tickFormatter={formatTime} />
+    <YAxis domain={[0, 100]} unit="%" />
+    <Tooltip formatter={(v) => `${v}%`} />
+    <Area
+      type="monotone"
+      dataKey="cpu_percent"
+      stroke="#3b82f6"
+      fill="url(#colorCpu)"
+    />
+  </AreaChart>
+</ResponsiveContainer>
+```
+
+- `ResponsiveContainer` zorunlu — sabit piksel width kullanma
+- `domain={[0, 100]}` yüzde metriklerinde her zaman belirt
+- Tooltip'te değeri formatla (% veya MB/GB)
+- Renk paleti: CPU=blue, RAM=purple, Disk=orange, Network=green
+
+### MetricGauge
+- Basit dairesel progress: `<CircularProgressbar>` veya Recharts `RadialBarChart`
+- Kritik eşik aşıldığında kırmızı, uyarı eşiğinde sarı, normal yeşil
+
+---
+
+## Log Görüntüleyici Kuralları
+
+```tsx
+// LogViewer.tsx — Performans kritik
+
+// 1. Sanal scroll kullan (binlerce log satırı için)
+// react-window veya @tanstack/virtual tercih et
+import { useVirtualizer } from "@tanstack/react-virtual";
+
+// 2. Her satırda level'a göre renk uygula
+const levelColor = LOG_LEVEL_COLORS[entry.level] ?? "text-gray-500";
+
+// 3. Filtreleme client-side yapılır (backend'den tüm loglar gelir, max 200)
+const filtered = logs.filter(l =>
+  selectedLevels.includes(l.level) &&
+  l.message.toLowerCase().includes(searchTerm.toLowerCase())
+);
+
+// 4. Komut kopyalama butonu her satırda
+// 5. Timestamp türkiye saatine çevir (date-fns/tz)
+```
+
+---
+
+## AI Analiz Paneli
+
+```tsx
+// components/ai/AnalysisPanel.tsx
+
+// Confidence bar rengi
+const confidenceColor = (c: number) =>
+  c >= 0.8 ? "bg-green-500" : c >= 0.5 ? "bg-yellow-500" : "bg-red-500";
+
+// Komut bloğu — kopyala butonu zorunlu
+function CommandBlock({ command, description }: { command: string; description: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="font-mono bg-gray-900 text-green-400 rounded-md p-3 flex justify-between">
+      <span>{command}</span>
+      <button onClick={() => { navigator.clipboard.writeText(command); setCopied(true); }}>
+        {copied ? <Check size={14} /> : <Copy size={14} />}
+      </button>
+    </div>
+  );
+}
+```
+
+**Önemli:** AI analiz panelinde komutlar sadece gösterilir, çalıştırma butonu **olmaz**.
+"Bu komutları kopyalayıp terminalde çalıştırın" ibaresi her zaman gösterilir.
+
+---
+
+## Sayfa Yapıları
+
+### `/` — Genel Bakış
+- Tüm sunucuları `ServerCard` bileşeni ile listele
+- Her kart: hostname, status badge, CPU/RAM/Disk hızlı görünüm, aktif alert sayısı
+- Polling: 30 saniye
+- Sunucu offline ise kart grileşir, "Son görülme: X dakika önce" göster
+
+### `/servers/[id]` — Sunucu Detayı
+- Üst: Server adı, IP, durum, uptime
+- Sekme navigasyonu: Metrikler | Servisler | Loglar | AI Analiz
+- Metrikler tab: 4 grafik (CPU, RAM, Disk, Network) + zaman aralığı seçici
+- Servisler tab: `ServiceList` — failed servisler üstte, renkli badge
+
+### `/alerts` — Alarm Merkezi
+- Aktif alarmlar önce, çözülenler sonra
+- Her alarm: severity badge, mesaj, sunucu adı, zaman
+- "Çözüldü olarak işaretle" butonu — `PATCH /api/v1/alerts/{id}/resolve`
+
+---
+
+## Hata Yönetimi (UI)
+
+```tsx
+// Her SWR hook hatası için tutarlı UI
+if (error) return <ErrorState message="Veriler yüklenemedi" retry={mutate} />;
+if (isLoading) return <LoadingSkeleton />;
+```
+
+- Her veri bileşeninde `ErrorState` ve `LoadingSkeleton` bileşeni kullan
+- `toast` (shadcn/ui) ile kullanıcı bildirimleri: alert çözüldü, AI analizi başladı
+- Network hatası vs auth hatası ayrı mesajlar
+
+---
+
+## Performans ve Erişilebilirlik
+
+- Tüm interactive elemanlar keyboard navigasyonu destekler
+- Renk körü uyumluluğu: sadece renge dayanma, ikon/metin de kullan
+- Grafik başlıkları `aria-label` ile erişilebilir
+- `next/image` kullan (varsa resimler için)
+- Loading state'lerde `Skeleton` bileşeni — layout shift olmamalı
+
+---
+
+## Test Kuralları
+
+- Bileşen testleri `Vitest` + `@testing-library/react`
+- SWR hook testlerinde `swr/dist/test` mock kullan
+- Snapshot test kullanma — davranış testlerini tercih et
+- Her kritik bileşen için test: `ServerCard`, `AlertCard`, `AnalysisPanel`, `LogViewer`

@@ -1,0 +1,389 @@
+---
+description: Usalp Backend API — FastAPI + PostgreSQL merkezi veri katmanı
+globs: backend/**/*.py, backend/**/alembic/**
+---
+
+# Backend API Modülü
+
+FastAPI ile yazılmış merkezi veri hub'ı. Agent'tan metrik alır, PostgreSQL'e yazar,
+alarm üretir ve AI analizini tetikler. Dashboard'a REST API sunar.
+
+---
+
+## Teknoloji Stack
+
+```
+Python          3.12+
+FastAPI         0.111+     # ASGI web framework
+SQLAlchemy      2.x        # ORM (async)
+asyncpg         0.29+      # Async PostgreSQL sürücüsü
+alembic         1.13+      # DB migration
+pydantic        2.x        # Request/response validation
+pydantic-settings 2.x      # .env yönetimi
+uvicorn         0.30+      # ASGI sunucu
+python-jose     3.x        # JWT
+passlib[bcrypt] 1.7+       # Şifre hash
+pytest          8.x        # Test framework
+pytest-asyncio  0.23+      # Async test desteği
+httpx           0.27+      # Test HTTP istemci
+```
+
+---
+
+## Dizin Yapısı
+
+```
+backend/
+├── app/
+│   ├── main.py               # FastAPI app, middleware, router kayıtları
+│   ├── config.py             # pydantic-settings, .env okuma
+│   ├── database.py           # SQLAlchemy async engine + session
+│   ├── dependencies.py       # FastAPI Depends() fonksiyonları
+│   │
+│   ├── models/               # SQLAlchemy ORM modelleri
+│   │   ├── __init__.py
+│   │   ├── server.py
+│   │   ├── metric.py
+│   │   ├── service_status.py
+│   │   ├── log_entry.py
+│   │   ├── alert.py
+│   │   └── ai_analysis.py
+│   │
+│   ├── schemas/              # Pydantic request/response şemaları
+│   │   ├── __init__.py
+│   │   ├── metric.py
+│   │   ├── server.py
+│   │   ├── alert.py
+│   │   └── ai_analysis.py
+│   │
+│   ├── routers/              # FastAPI router'ları
+│   │   ├── __init__.py
+│   │   ├── metrics.py        # POST /api/v1/metrics
+│   │   ├── servers.py        # GET /api/v1/servers/**
+│   │   ├── alerts.py         # GET/PATCH /api/v1/alerts/**
+│   │   └── ai.py             # POST /api/v1/ai/analyze
+│   │
+│   ├── services/             # İş mantığı katmanı
+│   │   ├── __init__.py
+│   │   ├── metric_service.py
+│   │   ├── alert_service.py  # Eşik kontrolü + alarm üretimi
+│   │   └── ai_service.py     # Claude API entegrasyonu
+│   │
+│   └── core/
+│       ├── security.py       # API key doğrulama, JWT
+│       └── exceptions.py     # Custom exception handler'lar
+│
+├── alembic/
+│   ├── env.py
+│   └── versions/
+│
+├── tests/
+│   ├── conftest.py           # Async test DB + override dependencies
+│   ├── test_metrics.py
+│   ├── test_alerts.py
+│   └── test_ai.py
+│
+├── pyproject.toml
+└── Dockerfile
+```
+
+---
+
+## SQLAlchemy Modelleri
+
+### Temel Kurallar
+- Tüm modeller `Base = DeclarativeBase()` sınıfından türer
+- Primary key: `id: Mapped[int] = mapped_column(primary_key=True)`
+- Timestamp: `created_at: Mapped[datetime] = mapped_column(server_default=func.now())`
+- Tüm foreign key'ler için `ondelete="CASCADE"` belirt
+- `__tablename__` her modelde açıkça tanımlanmalı
+
+```python
+# models/metric.py örneği
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import ForeignKey, Float, Integer, TIMESTAMP
+from app.database import Base
+from datetime import datetime
+
+class Metric(Base):
+    __tablename__ = "metrics"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id", ondelete="CASCADE"))
+    cpu_percent: Mapped[float]
+    ram_percent: Mapped[float]
+    disk_percent: Mapped[float]          # En yüksek dolan partition
+    network_in_bytes: Mapped[float]
+    network_out_bytes: Mapped[float]
+    load_avg_1: Mapped[float]
+    load_avg_5: Mapped[float]
+    load_avg_15: Mapped[float]
+    raw_json: Mapped[dict] = mapped_column(postgresql.JSONB)  # Tam payload saklanır
+    recorded_at: Mapped[datetime] = mapped_column(index=True)
+
+    server: Mapped["Server"] = relationship(back_populates="metrics")
+```
+
+---
+
+## FastAPI Uygulama Yapısı (`app/main.py`)
+
+```python
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: DB bağlantısını test et
+    await database.check_connection()
+    yield
+    # Shutdown: connection pool'u kapat
+    await database.engine.dispose()
+
+app = FastAPI(
+    title="Usalp API",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+)
+
+app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS, ...)
+
+app.include_router(metrics.router, prefix="/api/v1", tags=["metrics"])
+app.include_router(servers.router, prefix="/api/v1", tags=["servers"])
+app.include_router(alerts.router, prefix="/api/v1", tags=["alerts"])
+app.include_router(ai.router, prefix="/api/v1", tags=["ai"])
+```
+
+---
+
+## Authentication & Güvenlik
+
+### Agent Kimlik Doğrulama (API Key)
+```python
+# dependencies.py
+from fastapi import Security, HTTPException
+from fastapi.security import APIKeyHeader
+
+api_key_header = APIKeyHeader(name="Authorization")
+
+async def verify_agent_api_key(
+    api_key: str = Security(api_key_header),
+    db: AsyncSession = Depends(get_db),
+) -> Server:
+    """Bearer <api_key> formatında doğrular, Server nesnesi döner."""
+    token = api_key.removeprefix("Bearer ").strip()
+    server = await db.scalar(select(Server).where(Server.api_key == token))
+    if not server:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return server
+```
+
+### Dashboard Auth (JWT - basit, tek kullanıcı)
+- `POST /api/v1/auth/token` → username/password → JWT döner
+- JWT ömrü: 24 saat (MVP için yeterli)
+- Dashboard route'larında `Depends(get_current_user)` kullan
+
+---
+
+## Endpoint Implementasyonları
+
+### `POST /api/v1/metrics`
+
+```python
+@router.post("/metrics", status_code=202)
+async def receive_metrics(
+    payload: MetricPayload,
+    server: Server = Depends(verify_agent_api_key),
+    db: AsyncSession = Depends(get_db),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+):
+    # 1. Metric kaydını yaz
+    await metric_service.save(db, server.id, payload)
+    
+    # 2. Servis durumlarını güncelle
+    await metric_service.update_services(db, server.id, payload.services)
+    
+    # 3. Log entry'lerini kaydet
+    await metric_service.save_logs(db, server.id, payload.log_entries)
+    
+    # 4. Eşik kontrolü — background task olarak çalıştır
+    background_tasks.add_task(
+        alert_service.check_thresholds, db, server.id, payload
+    )
+    
+    return {"status": "accepted"}
+```
+
+**Önemli:** `BackgroundTasks` kullan — alert kontrolü ve AI tetiklemesi response'u yavaşlatmamalı.
+
+### `GET /api/v1/servers/{server_id}/metrics`
+
+```python
+@router.get("/servers/{server_id}/metrics")
+async def get_server_metrics(
+    server_id: int,
+    from_dt: datetime = Query(default=None),
+    to_dt: datetime = Query(default=None),
+    limit: int = Query(default=100, le=1000),
+    db: AsyncSession = Depends(get_db),
+):
+    """Zaman aralığı filtreli metrik listesi döner."""
+```
+
+- `from_dt` / `to_dt` yoksa son 1 saati döndür
+- `recorded_at` üzerinde index var, sorguları bu üzerinden yap
+
+---
+
+## Alarm Servisi (`services/alert_service.py`)
+
+```python
+THRESHOLDS = {
+    "cpu_percent":  {"warning": 80.0, "critical": 90.0},
+    "ram_percent":  {"warning": 85.0, "critical": 95.0},
+    "disk_percent": {"warning": 85.0, "critical": 95.0},
+}
+
+async def check_thresholds(db: AsyncSession, server_id: int, payload: MetricPayload):
+    """
+    Her metrik için eşik kontrolü yapar.
+    Yeni alert oluşturmadan önce aynı tipte aktif alert var mı kontrol eder.
+    (Alert spam'ini önler)
+    """
+    # CPU kontrolü
+    if payload.cpu.percent >= THRESHOLDS["cpu_percent"]["critical"]:
+        await _create_alert_if_not_exists(
+            db, server_id, type="cpu_threshold",
+            severity="critical",
+            message=f"CPU kullanımı kritik: %{payload.cpu.percent:.1f}"
+        )
+    
+    # Servis failed kontrolü — her failed servis için alert
+    for service in payload.services:
+        if service.status == "failed":
+            await _create_alert_if_not_exists(
+                db, server_id, type="service_failed",
+                severity="critical",
+                message=f"Servis durumu: {service.name} failed"
+            )
+            # Failed servis → AI analizi tetikle
+            await ai_service.trigger_analysis(db, server_id, alert_id=...)
+    
+    # Kritik log alert'i
+    critical_logs = [l for l in payload.log_entries if l.level in ("CRITICAL", "ERROR")]
+    if len(critical_logs) >= 5:  # 5+ kritik log → alert
+        await _create_alert_if_not_exists(...)
+```
+
+---
+
+## Veritabanı Bağlantısı (`database.py`)
+
+```python
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.orm import DeclarativeBase
+
+engine = create_async_engine(
+    settings.DATABASE_URL,
+    echo=settings.ENVIRONMENT == "development",
+    pool_size=10,
+    max_overflow=20,
+    pool_pre_ping=True,   # Bağlantı kopukluklarını önler
+)
+
+AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+```
+
+---
+
+## Pydantic Şema Kuralları
+
+- ORM model ile Pydantic şema ayrı dosyalarda, ayrı sınıflar
+- `model_config = ConfigDict(from_attributes=True)` tüm response şemalarında
+- Request şemalarında `model_config = ConfigDict(extra="forbid")` — bilinmeyen field reddet
+- Tarih alanlarında her zaman `datetime` tipi, `str` değil
+- Response'larda hassas alanları (`api_key`, `password`) **asla** ekleme
+
+```python
+# Doğru
+class ServerResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    hostname: str
+    status: str
+    created_at: datetime
+    # api_key YOK
+
+# Yanlış
+class ServerResponse(BaseModel):
+    id: int
+    api_key: str   # GÜVENLİK AÇIĞI
+```
+
+---
+
+## Test Kuralları
+
+```python
+# tests/conftest.py
+@pytest.fixture
+async def db_session():
+    """Her test için izole in-memory SQLite veritabanı."""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with AsyncSessionLocal(engine) as session:
+        yield session
+
+@pytest.fixture
+async def client(db_session):
+    """Test için FastAPI TestClient, gerçek DB Depends() override edilir."""
+    app.dependency_overrides[get_db] = lambda: db_session
+    async with AsyncClient(app=app, base_url="http://test") as ac:
+        yield ac
+```
+
+- Her endpoint için en az: 200 happy path + 401 auth hatası + 422 validation hatası
+- Alert servisi için: eşik altı (alert yok) + eşik üstü (alert var) + duplicate (tek alert)
+- `pytest-asyncio` ile async test desteği, `asyncio_mode = "auto"` pyproject.toml'da
+
+---
+
+## Performans Notları
+
+- `GET /metrics` endpoint'inde zaman aralığı olmadan tüm veriyi döndürme
+- Büyük `raw_json` kolonunu liste endpoint'lerinde **seçme** (`defer()` kullan)
+- `recorded_at` kolonu üzerinde **composite index**: `(server_id, recorded_at)`
+- Metrik tablosunda 30 günden eski veri için Alembic migration ile otomatik silme ekle (TODO(v2))
+
+---
+
+## Alembic Migration Kuralları
+
+```bash
+# Yeni migration oluştur
+alembic revision --autogenerate -m "add_metric_table"
+
+# Migration uygula
+alembic upgrade head
+
+# Geri al
+alembic downgrade -1
+```
+
+- Her migration dosyasında `upgrade()` ve `downgrade()` dolu olmalı
+- Production'da `alembic upgrade head` Docker Compose `entrypoint` olarak çalışsın
+- Model değişikliği = her zaman yeni migration, `Base.metadata.create_all()` kullanma

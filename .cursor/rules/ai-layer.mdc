@@ -1,0 +1,373 @@
+---
+description: Usalp AI Katmanı — Claude API entegrasyonu ve analiz motoru
+globs: backend/app/services/ai_service.py, backend/app/routers/ai.py, backend/app/ai/**
+---
+
+# AI Analiz Katmanı
+
+Claude API kullanarak log ve metrik verilerini yorumlayan katman.
+Backend içinde çalışır, structured JSON output üretir.
+
+---
+
+## Teknoloji Stack
+
+```
+anthropic       0.28+     # Resmi Python SDK
+pydantic        2.x       # Output doğrulama
+```
+
+---
+
+## Kullanılacak Model
+
+```python
+MODEL = "claude-opus-4-6"     # En güçlü analiz için
+MAX_TOKENS = 1024             # Analiz için yeterli
+```
+
+---
+
+## Canonical Output Şeması
+
+AI'den dönen her yanıt bu şemaya uygun olmalı. Pydantic ile doğrulanır.
+
+```python
+from pydantic import BaseModel, Field
+from typing import Literal
+
+class SuggestedCommand(BaseModel):
+    command: str
+    description: str
+
+class AiAnalysisResult(BaseModel):
+    severity: Literal["low", "medium", "high", "critical"]
+    category: Literal[
+        "network_error", "disk_issue", "permission_issue",
+        "config_error", "dependency_failure", "resource_exhaustion"
+    ]
+    summary: str = Field(description="1-2 cümle, Türkçe özet")
+    likely_causes: list[str] = Field(min_length=1, max_length=5)
+    suggested_commands: list[SuggestedCommand] = Field(min_length=1, max_length=6)
+    confidence: float = Field(ge=0.0, le=1.0)
+```
+
+---
+
+## Sistem Promptu
+
+```python
+SYSTEM_PROMPT = """Sen Usalp platformunun Linux sistem analiz uzmanısın.
+Sana sunulan log satırları, servis durumları ve sistem metrikleri üzerinden
+kök neden analizi yapıyorsun.
+
+ÇIKTI KURALLARI:
+- Yalnızca ve yalnızca geçerli JSON döndür. Başka hiçbir metin ekleme.
+- JSON şeması şu alanlardan oluşur:
+  {
+    "severity": "low|medium|high|critical",
+    "category": "network_error|disk_issue|permission_issue|config_error|dependency_failure|resource_exhaustion",
+    "summary": "string (Türkçe, 1-2 cümle)",
+    "likely_causes": ["string", ...],
+    "suggested_commands": [{"command": "string", "description": "string"}, ...],
+    "confidence": float (0.0-1.0)
+  }
+
+ANALİZ PRENSİPLERİ:
+- "Sorun kesinlikle şudur" deme. "Olası nedenler şunlardır" formatında yaz.
+- Her suggested_command gerçek, çalışır bir Linux komutu olmalı.
+- summary Türkçe yaz, teknik terimler İngilizce kalabilir (nginx, systemd vb.)
+- confidence: kanıt ne kadar güçlüyse o kadar yüksek (0.9+ = çok net sinyal)
+- Kategoriyi log ve metrik sinyallerinden çıkar:
+    * "Connection refused", "ECONNRESET", "timeout" → network_error
+    * "No space left", "I/O error", disk >%95 → disk_issue
+    * "Permission denied", "EACCES", "403" → permission_issue
+    * "Syntax error", "invalid config", "parse error" → config_error
+    * "dependency failed", "can't connect" → dependency_failure
+    * "OOM", "CPU throttled", "too many connections" → resource_exhaustion
+"""
+```
+
+---
+
+## Bağlam Paketi Hazırlama
+
+```python
+def build_context_package(
+    logs: list[LogEntry],
+    services: list[ServiceStatus],
+    metrics: Metric,
+) -> str:
+    """
+    AI'ye gönderilecek bağlam paketini hazırlar.
+    Token limitini aşmamak için öncelik sırası uygulanır.
+    """
+    # 1. Kritik ve error logları önce — max 60 satır
+    priority_logs = [l for l in logs if l.level in ("CRITICAL", "ERROR", "FATAL")][:60]
+    # 2. Warning logları — max 20 satır
+    warning_logs = [l for l in logs if l.level == "WARNING"][:20]
+
+    # Servis durumları — failed olanlar önce
+    failed_services = [s for s in services if s.status == "failed"]
+    other_services = [s for s in services if s.status != "failed"]
+
+    context = f"""
+## SİSTEM METRİKLERİ
+CPU: %{metrics.cpu_percent:.1f}  |  RAM: %{metrics.ram_percent:.1f}  |  Disk: %{metrics.disk_percent:.1f}
+Load Average: {metrics.load_avg_1:.2f} / {metrics.load_avg_5:.2f} / {metrics.load_avg_15:.2f}
+
+## SERVİS DURUMLARI
+{_format_services(failed_services, other_services)}
+
+## HATA LOGLARI (ÖNCELİKLİ)
+{_format_logs(priority_logs)}
+
+## UYARI LOGLARI
+{_format_logs(warning_logs)}
+""".strip()
+
+    return context
+
+def _format_services(failed: list, others: list) -> str:
+    lines = []
+    for s in failed:
+        lines.append(f"[FAILED] {s.name} — sub_state: {s.sub_state}" +
+                     (f", {s.since_seconds}s önce başladı" if s.since_seconds else ""))
+    for s in others:
+        lines.append(f"[{s.status.upper()}] {s.name}")
+    return "\n".join(lines) or "Tüm servisler normal"
+
+def _format_logs(entries: list) -> str:
+    if not entries:
+        return "(yok)"
+    return "\n".join(
+        f"[{e.logged_at.strftime('%H:%M:%S')}] [{e.level}] {e.source_file}: {e.message}"
+        for e in entries
+    )
+```
+
+---
+
+## API Çağrısı
+
+```python
+import anthropic
+import json
+from app.config import settings
+from app.schemas.ai_analysis import AiAnalysisResult
+
+client = anthropic.Anthropic(api_key=settings.LLM_API_KEY)
+
+async def call_claude(context_package: str) -> AiAnalysisResult:
+    """
+    Claude API'yi çağırır ve structured output döner.
+    JSON parse başarısız olursa retry yapar (max 2 kez).
+    """
+    message = client.messages.create(
+        model="claude-opus-4-6",
+        max_tokens=1024,
+        system=SYSTEM_PROMPT,
+        messages=[
+            {
+                "role": "user",
+                "content": f"Aşağıdaki sistem verisini analiz et:\n\n{context_package}"
+            }
+        ],
+    )
+
+    raw_text = message.content[0].text
+
+    # JSON parse — fence varsa temizle
+    clean = raw_text.strip().removeprefix("```json").removesuffix("```").strip()
+
+    try:
+        parsed = json.loads(clean)
+        return AiAnalysisResult(**parsed)
+    except (json.JSONDecodeError, ValueError) as e:
+        raise AiParseError(f"Claude yanıtı parse edilemedi: {e}") from e
+```
+
+---
+
+## AI Servis Ana Fonksiyonu
+
+```python
+async def trigger_analysis(
+    db: AsyncSession,
+    server_id: int,
+    alert_id: int | None = None,
+) -> AiAnalysis | None:
+    """
+    Bir sunucu için AI analizi başlatır ve sonucu DB'ye kaydeder.
+    Hata durumunda exception fırlatmaz — sadece loglar ve None döner.
+    (AI hatası sistemin çalışmasını durdurmamalı)
+    """
+    try:
+        # Bağlam verilerini çek
+        logs = await log_repo.get_recent(db, server_id, limit=100)
+        services = await service_repo.get_current(db, server_id)
+        metrics = await metric_repo.get_latest(db, server_id)
+
+        if not metrics:
+            log.warning("ai_skip_no_metrics", server_id=server_id)
+            return None
+
+        # Bağlam paketi hazırla
+        context = build_context_package(logs, services, metrics)
+
+        # Claude çağrısı
+        result = await call_claude(context)
+
+        # DB'ye kaydet
+        analysis = AiAnalysis(
+            server_id=server_id,
+            alert_id=alert_id,
+            category=result.category,
+            severity=result.severity,
+            summary=result.summary,
+            causes=result.likely_causes,
+            commands=[c.model_dump() for c in result.suggested_commands],
+            confidence=result.confidence,
+        )
+        db.add(analysis)
+        await db.commit()
+
+        log.info(
+            "ai_analysis_complete",
+            server_id=server_id,
+            category=result.category,
+            confidence=result.confidence,
+        )
+        return analysis
+
+    except AiParseError as e:
+        log.error("ai_parse_error", server_id=server_id, error=str(e))
+        return None
+    except anthropic.APIError as e:
+        log.error("ai_api_error", server_id=server_id, status=e.status_code)
+        return None
+    except Exception as e:
+        log.error("ai_unexpected_error", server_id=server_id, error=str(e))
+        return None
+```
+
+---
+
+## Güvenlik Kuralları
+
+### Input Sanitizasyon
+```python
+SENSITIVE_PATTERNS = [
+    (r'password\s*=\s*\S+', 'password=[REDACTED]'),
+    (r'token\s*=\s*\S+',    'token=[REDACTED]'),
+    (r'key\s*=\s*\S+',      'key=[REDACTED]'),
+    (r'secret\s*=\s*\S+',   'secret=[REDACTED]'),
+    (r'Bearer\s+\S+',       'Bearer [REDACTED]'),
+    (r'sk-ant-[a-zA-Z0-9-]+', '[API_KEY_REDACTED]'),
+]
+
+def sanitize_for_ai(text: str) -> str:
+    """Log içeriğindeki hassas verileri maskeler."""
+    import re
+    for pattern, replacement in SENSITIVE_PATTERNS:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text
+```
+
+- `build_context_package()` çağrılmadan önce tüm log mesajları `sanitize_for_ai()` ile geçirilir
+- AI yanıtları **asla** doğrudan komut olarak çalıştırılmaz; yalnızca frontend'de gösterilir
+- Context paketi max 4000 karakter olmalı (token limiti kontrolü)
+
+### Prompt Injection Koruması
+```python
+def check_prompt_injection(text: str) -> bool:
+    """
+    Loglar içinde prompt injection girişimi var mı kontrol eder.
+    Var ise loglamayı atla veya encode et.
+    """
+    injection_signals = [
+        "ignore previous instructions",
+        "system prompt",
+        "you are now",
+        "forget your",
+        "new instructions",
+    ]
+    lower = text.lower()
+    return any(sig in lower for sig in injection_signals)
+```
+
+---
+
+## Rate Limiting ve Maliyet Kontrolü
+
+```python
+# AI analizini throttle et — aynı sunucu için 5 dakikada bir max 1 analiz
+AI_COOLDOWN_SECONDS = 300
+
+async def can_trigger_analysis(db: AsyncSession, server_id: int) -> bool:
+    last = await ai_repo.get_last_analysis(db, server_id)
+    if not last:
+        return True
+    elapsed = (datetime.utcnow() - last.created_at).total_seconds()
+    return elapsed >= AI_COOLDOWN_SECONDS
+```
+
+- Manuel tetikleme de bu kontrolden geçer
+- Cooldown aşıldığında `429 Too Many Requests` döndür
+- Her API çağrısında `input_tokens` ve `output_tokens` logla (maliyet takibi)
+
+---
+
+## Manuel Analiz Endpoint'i (`routers/ai.py`)
+
+```python
+@router.post("/ai/analyze", response_model=ApiResponse[AiAnalysisSchema])
+async def manual_analyze(
+    request: ManualAnalyzeRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user),  # Dashboard auth
+):
+    """
+    Kullanıcının dashboard'dan manuel AI analizi tetiklemesi.
+    Cooldown kontrolü yapılır.
+    """
+    if not await ai_service.can_trigger_analysis(db, request.server_id):
+        raise HTTPException(
+            status_code=429,
+            detail="Bu sunucu için çok yakın zamanda analiz yapıldı. 5 dakika bekleyin."
+        )
+    
+    result = await ai_service.trigger_analysis(db, request.server_id)
+    if not result:
+        raise HTTPException(status_code=503, detail="AI analizi şu anda kullanılamıyor")
+    
+    return {"data": result, "meta": {"timestamp": datetime.utcnow().isoformat()}}
+```
+
+---
+
+## Test Stratejisi
+
+```python
+# tests/test_ai.py
+
+# 1. Context package testi — sanitizasyon çalışıyor mu?
+def test_sanitize_removes_password():
+    text = "DB connect password=supersecret123 failed"
+    result = sanitize_for_ai(text)
+    assert "supersecret123" not in result
+    assert "[REDACTED]" in result
+
+# 2. Parse testi — geçerli Claude çıktısı parse edilir mi?
+def test_parse_valid_output():
+    raw = '{"severity":"high","category":"config_error",...}'
+    result = AiAnalysisResult(**json.loads(raw))
+    assert result.severity == "high"
+
+# 3. Integration testi — gerçek API çağrısı (CI'da atla, .env'den key gerekir)
+@pytest.mark.skipif(not os.getenv("LLM_API_KEY"), reason="API key yok")
+async def test_real_analysis():
+    result = await call_claude(sample_context)
+    assert result.confidence >= 0.0
+    assert len(result.suggested_commands) >= 1
+```

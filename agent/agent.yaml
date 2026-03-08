@@ -1,0 +1,33 @@
+server:
+  backend_url: "http://localhost/api/v1"
+  api_key: "usalp-agent-change-me"
+
+collection:
+  interval_seconds: 30
+  metrics:
+    cpu: true
+    memory: true
+    disk: true
+    network: true
+    load_avg: true
+
+services:
+  enabled: true
+  check_interval_seconds: 60
+  watch:
+    - nginx
+    - postgresql
+    - docker
+
+logs:
+  enabled: true
+  tail_lines: 50
+  sources:
+    - path: /var/log/syslog
+      level_filter: error
+    - path: /var/log/auth.log
+      level_filter: warning
+
+logging:
+  level: INFO
+  file: /var/log/usalp-agent.log

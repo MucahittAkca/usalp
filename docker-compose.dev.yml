@@ -1,0 +1,19 @@
+# Geliştirme için override — docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  backend:
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend:/app
+
+  dashboard:
+    command: npm run dev
+    volumes:
+      - ./dashboard:/app
+      - /app/node_modules      # node_modules host'tan izole
+    environment:
+      NODE_ENV: development
+
+  postgres:
+    ports:
+      - "5432:5432"            # Dev'de dışarıdan erişim (DBeaver vb.)
