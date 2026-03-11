@@ -1,79 +1,114 @@
-"""Usalp Agent — Sunucu metriklerini toplar ve merkezi sisteme gönderir."""
+"""Usalp Agent — Sunucu metriklerini toplar ve merkezi sisteme gönderir.
+
+``schedule`` kütüphanesi ile iki döngü çalıştırır:
+- **fast_cycle** (varsayılan 30 s): CPU, RAM, Network, Servis, Log
+- **slow_cycle** (varsayılan 60 s): Disk, Process
+
+Her fast_cycle sonunda tüm veriler tek bir ``MetricPayload`` olarak
+Backend API'ye gönderilir.  slow_cycle yalnızca ağır collector'ları
+çalıştırıp sonuçları önbelleğe alır.
+"""
 
 from __future__ import annotations
 
 import argparse
-import asyncio
-import logging
+import time
 from pathlib import Path
 
-import yaml
+import schedule
+import structlog
 
-from collectors import cpu, disk, logs, memory, network, services
+from agent.collectors import cpu, disk, memory, network, process, services
+from agent.config import AgentConfig, LogFileConfig, load_config
+from agent.models import MetricPayload
+from agent.readers.log_reader import read_logs
+from agent.sender.http_sender import ClientError, send_metrics
 
-logger = logging.getLogger("usalp-agent")
+log = structlog.get_logger()
 
-
-def load_config(path: Path) -> dict:
-    """YAML konfigürasyon dosyasını yükler."""
-    with open(path) as f:
-        return yaml.safe_load(f)
-
-
-async def collect_metrics(config: dict) -> dict:
-    """Tüm aktif collector'lardan metrik toplar."""
-    metrics_cfg = config["collection"]["metrics"]
-    data: dict = {}
-
-    if metrics_cfg.get("cpu"):
-        data.update(cpu.collect())
-    if metrics_cfg.get("memory"):
-        data.update(memory.collect())
-    if metrics_cfg.get("disk"):
-        data.update(disk.collect())
-    if metrics_cfg.get("network"):
-        data.update(network.collect())
-    if metrics_cfg.get("load_avg"):
-        data["load_avg_1"], data["load_avg_5"], data["load_avg_15"] = (
-            cpu.collect_load_avg()
-        )
-
-    return data
+_cached_disks: list = []
+_cached_processes: list = []
 
 
-async def run(config: dict) -> None:
-    """Ana döngü: belirli aralıklarla metrik toplar ve gönderir."""
-    import httpx
+def _slow_cycle(config: AgentConfig) -> None:
+    """Disk ve process verilerini toplar, modül önbelleğine yazar."""
+    global _cached_disks, _cached_processes  # noqa: PLW0603
 
-    interval = config["collection"]["interval_seconds"]
-    backend_url = config["server"]["backend_url"]
-    api_key = config["server"]["api_key"]
+    try:
+        _cached_disks = disk.collect()
+    except Exception:
+        log.exception("collector_failed", collector="disk")
 
-    async with httpx.AsyncClient(
-        base_url=backend_url,
-        headers={"X-API-Key": api_key},
-        timeout=30.0,
-    ) as client:
-        while True:
-            try:
-                payload = await collect_metrics(config)
+    try:
+        _cached_processes = process.collect()
+    except Exception:
+        log.exception("collector_failed", collector="process")
 
-                if config.get("services", {}).get("enabled"):
-                    svc_list = config["services"].get("watch", [])
-                    payload["services"] = services.collect(svc_list)
+    log.debug(
+        "slow_cycle_done",
+        disks=len(_cached_disks),
+        processes=len(_cached_processes),
+    )
 
-                if config.get("logs", {}).get("enabled"):
-                    log_sources = config["logs"].get("sources", [])
-                    payload["logs"] = logs.collect(log_sources)
 
-                response = await client.post("/metrics", json=payload)
-                response.raise_for_status()
-                logger.info("Metrikler gönderildi (%s)", response.status_code)
+def _fast_cycle(config: AgentConfig) -> None:
+    """CPU, RAM, Network, Servis, Log toplar ve payload'ı gönderir."""
+    try:
+        cpu_metrics = cpu.collect()
+    except Exception:
+        log.exception("collector_failed", collector="cpu")
+        return
 
-            except Exception:
-                logger.exception("Metrik gönderimi başarısız")
+    try:
+        mem_metrics = memory.collect()
+    except Exception:
+        log.exception("collector_failed", collector="memory")
+        return
 
-            await asyncio.sleep(interval)
+    try:
+        net_metrics = network.collect()
+    except Exception:
+        log.exception("collector_failed", collector="network")
+        net_metrics = []
+
+    try:
+        svc_statuses = services.collect(config.services)
+    except Exception:
+        log.exception("collector_failed", collector="services")
+        svc_statuses = []
+
+    try:
+        log_cfgs = [
+            LogFileConfig(
+                path=lf.path,
+                tail_lines=lf.tail_lines,
+                min_level=lf.min_level,
+            )
+            for lf in config.log_files
+        ]
+        log_entries = read_logs(log_cfgs)
+    except Exception:
+        log.exception("collector_failed", collector="log_reader")
+        log_entries = []
+
+    payload = MetricPayload(
+        server_id=config.server_id,
+        cpu=cpu_metrics,
+        memory=mem_metrics,
+        disks=_cached_disks,
+        networks=net_metrics,
+        top_processes=_cached_processes,
+        services=svc_statuses,
+        log_entries=log_entries,
+    )
+
+    try:
+        send_metrics(payload, config)
+    except ClientError:
+        log.error("send_dropped_client_error", server_id=config.server_id)
+    except Exception:
+        # TODO(v2): local SQLite buffer ile retry kuyruğu
+        log.exception("send_failed_dropping", server_id=config.server_id)
 
 
 def main() -> None:
@@ -89,14 +124,28 @@ def main() -> None:
 
     config = load_config(args.config)
 
-    log_level = config.get("logging", {}).get("level", "INFO")
-    logging.basicConfig(
-        level=getattr(logging, log_level),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    structlog.configure(
+        wrapper_class=structlog.make_filtering_bound_logger(
+            structlog.get_level_from_env("LOG_LEVEL", default="INFO")
+        ),
     )
 
-    logger.info("Usalp Agent başlatılıyor...")
-    asyncio.run(run(config))
+    log.info(
+        "agent_starting",
+        server_id=config.server_id,
+        backend_url=config.backend_url,
+        fast_interval=config.intervals.fast,
+        slow_interval=config.intervals.slow,
+    )
+
+    _slow_cycle(config)
+
+    schedule.every(config.intervals.fast).seconds.do(_fast_cycle, config=config)
+    schedule.every(config.intervals.slow).seconds.do(_slow_cycle, config=config)
+
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
 
 
 if __name__ == "__main__":
