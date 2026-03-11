@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import String, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+if TYPE_CHECKING:
+    from app.models.ai_analysis import AIAnalysis
+    from app.models.alert import Alert
+    from app.models.log_entry import LogEntry
+    from app.models.metric import Metric
+    from app.models.service_status import ServiceStatus
 
 
 class Server(Base):
@@ -19,6 +27,22 @@ class Server(Base):
     name: Mapped[str] = mapped_column(String(255))
     hostname: Mapped[str] = mapped_column(String(255))
     ip_address: Mapped[str] = mapped_column(String(45))
-    api_key: Mapped[str] = mapped_column(String(255), unique=True)
+    api_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     status: Mapped[str] = mapped_column(String(20), default="active")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    metrics: Mapped[list[Metric]] = relationship(
+        back_populates="server", cascade="all, delete-orphan"
+    )
+    alerts: Mapped[list[Alert]] = relationship(
+        back_populates="server", cascade="all, delete-orphan"
+    )
+    services: Mapped[list[ServiceStatus]] = relationship(
+        back_populates="server", cascade="all, delete-orphan"
+    )
+    log_entries: Mapped[list[LogEntry]] = relationship(
+        back_populates="server", cascade="all, delete-orphan"
+    )
+    ai_analyses: Mapped[list[AIAnalysis]] = relationship(
+        back_populates="server", cascade="all, delete-orphan"
+    )

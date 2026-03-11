@@ -5,13 +5,19 @@ from __future__ import annotations
 import json
 import logging
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.config import settings
+from app.models.ai_analysis import AIAnalysis
 
 logger = logging.getLogger(__name__)
 
 AI_ANALYSIS_SCHEMA = {
     "severity": "low | medium | high | critical",
-    "category": "network_error | disk_issue | permission_issue | config_error | dependency_failure | resource_exhaustion",
+    "category": (
+        "network_error | disk_issue | permission_issue | "
+        "config_error | dependency_failure | resource_exhaustion"
+    ),
     "summary": "Kısa, Türkçe açıklama (1-2 cümle)",
     "likely_causes": ["Olası neden 1", "Olası neden 2"],
     "suggested_commands": [{"command": "...", "description": "..."}],
@@ -50,3 +56,31 @@ async def analyze(context: str) -> dict:
     except (json.JSONDecodeError, IndexError):
         logger.error("AI yanıtı parse edilemedi: %s", message.content)
         return {}
+
+
+async def trigger_analysis(
+    db: AsyncSession,
+    server_id: int,
+    context: str,
+    *,
+    alert_id: int | None = None,
+) -> AIAnalysis | None:
+    """AI analizi tetikler ve sonucu DB'ye kaydeder."""
+    result = await analyze(context)
+    if not result:
+        return None
+
+    analysis = AIAnalysis(
+        alert_id=alert_id,
+        server_id=server_id,
+        category=result.get("category", "unknown"),
+        severity=result.get("severity", "medium"),
+        summary=result.get("summary", ""),
+        causes=json.dumps(result.get("likely_causes", []), ensure_ascii=False),
+        commands=json.dumps(result.get("suggested_commands", []), ensure_ascii=False),
+        confidence=result.get("confidence", 0.0),
+    )
+    db.add(analysis)
+    await db.flush()
+    logger.info("AI analiz kaydedildi: server=%d alert=%s", server_id, alert_id)
+    return analysis
