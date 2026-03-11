@@ -5,25 +5,39 @@ globs: backend/app/services/ai_service.py, backend/app/routers/ai.py, backend/ap
 
 # AI Analiz Katmanı
 
-Claude API kullanarak log ve metrik verilerini yorumlayan katman.
-Backend içinde çalışır, structured JSON output üretir.
+OpenRouter API üzerinden LLM modellerine erişerek log ve metrik verilerini
+yorumlayan katman. Backend içinde çalışır, structured JSON output üretir.
+Anthropic Python SDK'nın `base_url` parametresi ile OpenRouter'a yönlendirilir.
 
 ---
 
 ## Teknoloji Stack
 
 ```
-anthropic       0.28+     # Resmi Python SDK
+anthropic       0.28+     # Python SDK (OpenRouter uyumlu, base_url ile)
 pydantic        2.x       # Output doğrulama
 ```
 
 ---
 
-## Kullanılacak Model
+## LLM Erişimi (OpenRouter)
 
 ```python
-MODEL = "claude-opus-4-6"     # En güçlü analiz için
-MAX_TOKENS = 1024             # Analiz için yeterli
+# Konfigürasyon (config.py / .env)
+LLM_API_KEY = "sk-or-v1-..."                          # OpenRouter API key
+LLM_BASE_URL = "https://openrouter.ai/api"            # OpenRouter endpoint
+LLM_MODEL = "anthropic/claude-sonnet-4-20250514"       # OpenRouter model ID
+MAX_TOKENS = 1024
+```
+
+Anthropic SDK `base_url` parametresi ile OpenRouter'a yönlendirilir:
+
+```python
+client = anthropic.AsyncAnthropic(
+    api_key=settings.LLM_API_KEY,
+    base_url=settings.LLM_BASE_URL,
+)
+message = await client.messages.create(model=settings.LLM_MODEL, ...)
 ```
 
 ---
@@ -148,7 +162,7 @@ def _format_logs(entries: list) -> str:
 
 ---
 
-## API Çağrısı
+## API Çağrısı (OpenRouter üzerinden)
 
 ```python
 import anthropic
@@ -156,15 +170,18 @@ import json
 from app.config import settings
 from app.schemas.ai_analysis import AiAnalysisResult
 
-client = anthropic.Anthropic(api_key=settings.LLM_API_KEY)
-
 async def call_claude(context_package: str) -> AiAnalysisResult:
     """
-    Claude API'yi çağırır ve structured output döner.
+    OpenRouter üzerinden LLM API'yi çağırır ve structured output döner.
     JSON parse başarısız olursa retry yapar (max 2 kez).
     """
-    message = client.messages.create(
-        model="claude-opus-4-6",
+    client = anthropic.AsyncAnthropic(
+        api_key=settings.LLM_API_KEY,
+        base_url=settings.LLM_BASE_URL,
+    )
+
+    message = await client.messages.create(
+        model=settings.LLM_MODEL,
         max_tokens=1024,
         system=SYSTEM_PROMPT,
         messages=[

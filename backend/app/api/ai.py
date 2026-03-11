@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,23 +25,25 @@ async def trigger_analysis(
     db: AsyncSession = Depends(get_db),
     _user: str = Depends(get_current_user),
 ) -> dict:
-    """Manuel AI analiz tetikler."""
+    """Manuel AI analiz tetikler. Cooldown kontrolü yapılır."""
     server = await db.get(Server, request.server_id)
     if not server:
         raise NotFoundError("Server", request.server_id)
 
-    context = request.context or f"Sunucu: {server.name} ({server.hostname})"
+    if not await ai_analyzer.can_trigger_analysis(db, server.id):
+        raise HTTPException(
+            status_code=429,
+            detail="Bu sunucu için çok yakın zamanda analiz yapıldı. 5 dakika bekleyin.",
+        )
 
-    analysis = await ai_analyzer.trigger_analysis(
-        db, server.id, context,
-    )
+    analysis = await ai_analyzer.trigger_analysis(db, server.id)
 
     if not analysis:
         return {
             "data": None,
             "meta": {
                 "timestamp": datetime.now(UTC).isoformat(),
-                "message": "AI analiz çalıştırılamadı (API key eksik veya hata)",
+                "message": "AI analiz çalıştırılamadı (API key eksik veya metrik yok)",
             },
         }
 

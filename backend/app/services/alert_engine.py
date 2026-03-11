@@ -64,40 +64,20 @@ async def _create_alert_if_not_exists(
     return alert
 
 
-def _build_context(server_id: int, payload: MetricPayload, focus: str) -> str:
-    """AI analizi için bağlam metni oluşturur."""
-    lines = [
-        f"Server ID: {server_id}",
-        f"Collected at: {payload.collected_at.isoformat()}",
-        f"Focus: {focus}",
-        f"CPU: {payload.cpu.percent:.1f}%  (load 1/5/15: "
-        f"{payload.cpu.load_avg_1:.2f}/{payload.cpu.load_avg_5:.2f}/{payload.cpu.load_avg_15:.2f})",
-        f"Memory: {payload.memory.percent:.1f}%",
-    ]
-    for d in payload.disks:
-        lines.append(f"Disk {d.path}: {d.percent:.1f}%")
-    for svc in payload.services:
-        lines.append(f"Service {svc.name}: {svc.status}")
-    error_logs = [le for le in payload.log_entries if le.level in ("CRITICAL", "ERROR")]
-    for le in error_logs[:10]:
-        lines.append(f"[{le.level}] {le.source_file}: {le.message}")
-    return "\n".join(lines)
-
-
 async def _maybe_trigger_ai(
     db: AsyncSession,
     alert: Alert | None,
     server_id: int,
-    payload: MetricPayload,
-    focus: str,
 ) -> None:
-    """Yeni kritik alert oluşturulduysa AI analiz tetikler."""
+    """Yeni kritik alert oluşturulduysa AI analiz tetikler.
+
+    Bağlam paketi artık ai_analyzer içinde DB'den çekilir.
+    """
     if alert is None or alert.severity != "critical":
         return
     try:
-        context = _build_context(server_id, payload, focus)
         await ai_analyzer.trigger_analysis(
-            db, server_id, context, alert_id=alert.id,
+            db, server_id, alert_id=alert.id,
         )
     except Exception:
         logger.exception("AI analiz tetiklenemedi: server=%d alert=%d", server_id, alert.id)
@@ -122,7 +102,7 @@ async def check_thresholds(
         )
         if a:
             created.append(a)
-        await _maybe_trigger_ai(db, a, server_id, payload, f"CPU kritik: %{cpu:.1f}")
+        await _maybe_trigger_ai(db, a, server_id)
     elif cpu >= THRESHOLDS["cpu_percent"]["warning"]:
         a = await _create_alert_if_not_exists(
             db, server_id,
@@ -144,7 +124,7 @@ async def check_thresholds(
         )
         if a:
             created.append(a)
-        await _maybe_trigger_ai(db, a, server_id, payload, f"RAM kritik: %{ram:.1f}")
+        await _maybe_trigger_ai(db, a, server_id)
     elif ram >= THRESHOLDS["ram_percent"]["warning"]:
         a = await _create_alert_if_not_exists(
             db, server_id,
@@ -166,7 +146,7 @@ async def check_thresholds(
         )
         if a:
             created.append(a)
-        await _maybe_trigger_ai(db, a, server_id, payload, f"Disk kritik: %{max_disk:.1f}")
+        await _maybe_trigger_ai(db, a, server_id)
     elif max_disk >= THRESHOLDS["disk_percent"]["warning"]:
         a = await _create_alert_if_not_exists(
             db, server_id,
@@ -188,9 +168,7 @@ async def check_thresholds(
             )
             if a:
                 created.append(a)
-            await _maybe_trigger_ai(
-                db, a, server_id, payload, f"Servis failed: {svc.name}",
-            )
+            await _maybe_trigger_ai(db, a, server_id)
 
     # --- Kritik log patlaması (5+ ERROR/CRITICAL) ---
     critical_logs = [le for le in payload.log_entries if le.level in ("CRITICAL", "ERROR")]

@@ -10,6 +10,8 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = "postgresql+asyncpg://usalp:usalp@localhost:5432/usalp"
     LLM_API_KEY: str = ""
+    LLM_BASE_URL: str = "https://openrouter.ai/api"
+    LLM_MODEL: str = "anthropic/claude-sonnet-4-20250514"
     SECRET_KEY: str = "change-me-in-production"
     ENVIRONMENT: str = "development"
 

@@ -27,6 +27,24 @@ class CommandSuggestion(BaseModel):
     description: str
 
 
+class AiAnalysisResult(BaseModel):
+    """Claude API'den dönen ham analiz sonucu — Pydantic ile doğrulanır."""
+
+    severity: Literal["low", "medium", "high", "critical"]
+    category: Literal[
+        "network_error",
+        "disk_issue",
+        "permission_issue",
+        "config_error",
+        "dependency_failure",
+        "resource_exhaustion",
+    ]
+    summary: str = Field(description="1-2 cümle, Türkçe özet")
+    likely_causes: list[str] = Field(min_length=1, max_length=5)
+    suggested_commands: list[CommandSuggestion] = Field(min_length=1, max_length=6)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
 class AIAnalysisOut(BaseModel):
     """AI analiz yanıtı — causes ve commands yapısal olarak döndürülür."""
 
@@ -72,4 +90,3 @@ class AIAnalyzeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     server_id: int
-    context: str | None = None
