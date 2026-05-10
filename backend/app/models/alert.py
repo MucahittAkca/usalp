@@ -25,6 +25,7 @@ class Alert(Base):
         ForeignKey("servers.id", ondelete="CASCADE")
     )
     type: Mapped[str] = mapped_column(String(50))
+    dedupe_key: Mapped[str] = mapped_column(String(255), index=True, default="")
     severity: Mapped[str] = mapped_column(String(20))
     message: Mapped[str] = mapped_column(Text)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

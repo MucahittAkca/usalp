@@ -12,7 +12,7 @@ import time
 
 import psutil
 
-from agent.models import ProcessInfo
+from models import ProcessInfo
 
 _TOP_N = 10
 _PRIME_INTERVAL = 0.1
@@ -23,7 +23,7 @@ def collect() -> list[ProcessInfo]:
     attrs = ["pid", "name", "cpu_percent", "memory_percent", "status"]
 
     # İlk geçiş: cpu_percent sayaçlarını başlat (ilk çağrıda 0.0 döner)
-    for proc in psutil.process_iter(attrs):
+    for _proc in psutil.process_iter(attrs):
         pass
 
     time.sleep(_PRIME_INTERVAL)

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import psutil
 
-from agent.models import CpuMetrics
+from models import CpuMetrics
 
 
 def collect() -> CpuMetrics:

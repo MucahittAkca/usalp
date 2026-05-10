@@ -135,9 +135,9 @@ def build_context_package(
     ]
 
     priority_logs = [
-        l for l in safe_logs if l.level in ("CRITICAL", "ERROR", "FATAL")
+        entry for entry in safe_logs if entry.level in ("CRITICAL", "ERROR", "FATAL")
     ][:60]
-    warning_logs = [l for l in safe_logs if l.level == "WARNING"][:20]
+    warning_logs = [entry for entry in safe_logs if entry.level == "WARNING"][:20]
 
     failed_services = [s for s in services if s.status == "failed"]
     other_services = [s for s in services if s.status != "failed"]

@@ -18,11 +18,11 @@ from pathlib import Path
 import schedule
 import structlog
 
-from agent.collectors import cpu, disk, memory, network, process, services
-from agent.config import AgentConfig, LogFileConfig, load_config
-from agent.models import MetricPayload
-from agent.readers.log_reader import read_logs
-from agent.sender.http_sender import ClientError, send_metrics
+from collectors import cpu, disk, memory, network, process, services
+from config import AgentConfig, LogFileConfig, load_config
+from models import MetricPayload
+from readers.log_reader import read_logs
+from sender.http_sender import ClientError, send_metrics
 
 log = structlog.get_logger()
 

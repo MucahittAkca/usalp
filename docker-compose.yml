@@ -34,6 +34,7 @@ services:
       - internal
     volumes:
       - ./backend:/app   # Development: hot reload
+      - ./agent:/agent:ro
 
   dashboard:
     build:

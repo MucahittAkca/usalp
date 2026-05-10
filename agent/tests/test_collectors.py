@@ -11,8 +11,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from agent.collectors import cpu, disk, memory, network, process, services
-from agent.models import (
+from collectors import cpu, disk, memory, network, process, services
+from models import (
     CpuMetrics,
     DiskMetrics,
     MemoryMetrics,
@@ -20,7 +20,6 @@ from agent.models import (
     ProcessInfo,
     ServiceStatus,
 )
-
 
 # ── CPU ──────────────────────────────────────────────────────────────
 
@@ -179,7 +178,7 @@ class TestServicesCollector:
         return f"ActiveState={active}\nSubState={sub}\nActiveEnterTimestamp={ts}\n"
 
     def test_returns_list_of_service_status(self, mocker: pytest.fixture) -> None:
-        mock_run = mocker.patch("agent.collectors.services.subprocess.run")
+        mock_run = mocker.patch("collectors.services.subprocess.run")
         mock_run.return_value = MagicMock(
             stdout=self._mock_systemctl_output("active", "running", ""),
             returncode=0,
@@ -190,7 +189,7 @@ class TestServicesCollector:
         assert isinstance(result[0], ServiceStatus)
 
     def test_active_service_fields(self, mocker: pytest.fixture) -> None:
-        mock_run = mocker.patch("agent.collectors.services.subprocess.run")
+        mock_run = mocker.patch("collectors.services.subprocess.run")
         mock_run.return_value = MagicMock(
             stdout=self._mock_systemctl_output("active", "running", ""),
             returncode=0,
@@ -203,7 +202,7 @@ class TestServicesCollector:
         assert svc.sub_state == "running"
 
     def test_failed_service(self, mocker: pytest.fixture) -> None:
-        mock_run = mocker.patch("agent.collectors.services.subprocess.run")
+        mock_run = mocker.patch("collectors.services.subprocess.run")
         mock_run.return_value = MagicMock(
             stdout=self._mock_systemctl_output("failed", "failed", ""),
             returncode=0,
@@ -215,7 +214,7 @@ class TestServicesCollector:
     def test_timeout_returns_unknown(self, mocker: pytest.fixture) -> None:
         import subprocess as sp
 
-        mock_run = mocker.patch("agent.collectors.services.subprocess.run")
+        mock_run = mocker.patch("collectors.services.subprocess.run")
         mock_run.side_effect = sp.TimeoutExpired(cmd="systemctl", timeout=5)
 
         result = services.collect(["slow-svc"])
@@ -223,7 +222,7 @@ class TestServicesCollector:
         assert result[0].sub_state == "unknown"
 
     def test_multiple_services(self, mocker: pytest.fixture) -> None:
-        mock_run = mocker.patch("agent.collectors.services.subprocess.run")
+        mock_run = mocker.patch("collectors.services.subprocess.run")
         mock_run.return_value = MagicMock(
             stdout=self._mock_systemctl_output("active", "running", ""),
             returncode=0,

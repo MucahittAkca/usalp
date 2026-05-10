@@ -313,10 +313,10 @@ async def test_logs_saved_to_db(client: AsyncClient, db_session: AsyncSession) -
 
 
 @pytest.mark.asyncio
-async def test_server_status_updated_to_active(
+async def test_server_status_updated_to_online(
     client: AsyncClient, db_session: AsyncSession,
 ) -> None:
-    """Metrik alındığında sunucu status='active' olarak güncellenir."""
+    """Metrik alındığında sunucu status='online' olarak güncellenir."""
     server = await _seed_server(db_session)
     assert server.status == "inactive"
 
@@ -327,7 +327,8 @@ async def test_server_status_updated_to_active(
     )
 
     await db_session.refresh(server)
-    assert server.status == "active"
+    assert server.status == "online"
+    assert server.last_seen is not None
 
 
 # ===================================================================
@@ -631,7 +632,7 @@ async def test_alert_engine_failed_service(
 async def test_alert_engine_multiple_failed_services_single_alert(
     mock_ai: AsyncMock, db_session: AsyncSession,
 ) -> None:
-    """Birden fazla failed servis olsa da aynı tipte tek alert oluşur (spam önleme)."""
+    """Birden fazla failed servis için servis bazlı scoped alert oluşur."""
     server = await _seed_server(db_session)
     data = _make_payload()
     data["services"] = [
@@ -645,9 +646,12 @@ async def test_alert_engine_multiple_failed_services_single_alert(
     await db_session.commit()
 
     svc_alerts = [a for a in alerts if a.type == "service_failed"]
-    assert len(svc_alerts) == 1
-    assert svc_alerts[0].severity == "critical"
-    assert "nginx" in svc_alerts[0].message
+    assert len(svc_alerts) == 2
+    assert {a.dedupe_key for a in svc_alerts} == {
+        "service_failed:nginx",
+        "service_failed:postgresql",
+    }
+    assert all(a.severity == "critical" for a in svc_alerts)
 
 
 @pytest.mark.asyncio

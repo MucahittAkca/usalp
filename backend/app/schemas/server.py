@@ -4,7 +4,32 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class ServerCreate(BaseModel):
+    """Yeni sunucu kayıt isteği."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=255)
+    hostname: str = Field(min_length=1, max_length=255)
+    ip_address: str = Field(min_length=7, max_length=45)
+
+
+class ServerCreatedOut(BaseModel):
+    """Sunucu oluşturma yanıtı — api_key yalnızca bu yanıtta bir kez döner."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    hostname: str
+    ip_address: str
+    status: str
+    api_key: str
+    last_seen: datetime | None
+    created_at: datetime
 
 
 class ServerOut(BaseModel):
@@ -17,7 +42,15 @@ class ServerOut(BaseModel):
     hostname: str
     ip_address: str
     status: str
+    last_seen: datetime | None
     created_at: datetime
+
+
+class ServerApiKeyOut(BaseModel):
+    """Yeni/yenilenmiş agent API anahtarı yanıtı."""
+
+    id: int
+    api_key: str
 
 
 class ServiceStatusOut(BaseModel):

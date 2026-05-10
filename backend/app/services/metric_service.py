@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.log_entry import LogEntry
@@ -20,9 +21,11 @@ MAX_LOG_ENTRIES_PER_BATCH = 200
 
 
 async def update_server_status(db: AsyncSession, server_id: int) -> None:
-    """Metrik geldiğinde sunucuyu active olarak işaretler."""
+    """Metrik geldiğinde sunucuyu online olarak işaretler ve last_seen günceller."""
     await db.execute(
-        update(Server).where(Server.id == server_id).values(status="active")
+        update(Server)
+        .where(Server.id == server_id)
+        .values(status="online", last_seen=datetime.now(UTC))
     )
 
 
@@ -80,6 +83,18 @@ async def save_logs(
     trimmed = logs[:MAX_LOG_ENTRIES_PER_BATCH]
     count = 0
     for entry in trimmed:
+        exists = await db.scalar(
+            select(LogEntry.id)
+            .where(
+                LogEntry.server_id == server_id,
+                LogEntry.source_file == entry.source_file,
+                LogEntry.raw_line == entry.raw_line,
+                LogEntry.logged_at == entry.logged_at,
+            )
+            .limit(1)
+        )
+        if exists:
+            continue
         record = LogEntry(
             server_id=server_id,
             source_file=entry.source_file,

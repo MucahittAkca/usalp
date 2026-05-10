@@ -15,7 +15,7 @@ from typing import NamedTuple
 
 import psutil
 
-from agent.models import NetworkMetrics
+from models import NetworkMetrics
 
 _IGNORED_INTERFACES = frozenset({"lo"})
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import psutil
 
-from agent.models import MemoryMetrics
+from models import MemoryMetrics
 
 
 def collect() -> MemoryMetrics:

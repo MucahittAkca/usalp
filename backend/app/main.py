@@ -2,29 +2,55 @@
 
 from __future__ import annotations
 
+import asyncio
+import io
 import logging
-from contextlib import asynccontextmanager
+import os
+import tarfile
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import ai, alerts, auth, metrics, servers
 from app.config import settings
 from app.core.exceptions import register_exception_handlers
-from app.database import engine, get_db
+from app.database import async_session, engine, get_db
+from app.services import retention, server_status
 
 logger = logging.getLogger(__name__)
+AGENT_SOURCE_DIR = Path(os.getenv("AGENT_SOURCE_DIR", "/agent"))
+
+
+async def _maintenance_loop() -> None:
+    """Offline işaretleme ve retention temizliğini periyodik çalıştırır."""
+    while True:
+        try:
+            async with async_session() as session:
+                await server_status.mark_stale_servers_offline(session)
+                await retention.cleanup_old_records(session)
+                await session.commit()
+        except Exception:
+            logger.exception("maintenance_loop_failed")
+        await asyncio.sleep(settings.RETENTION_SWEEP_INTERVAL_SECONDS)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):  # noqa: ANN001
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup: DB bağlantısını test et, Shutdown: pool'u kapat."""
     async with engine.connect() as conn:
         await conn.execute(text("SELECT 1"))
     logger.info("Database bağlantısı başarılı")
+    maintenance_task = asyncio.create_task(_maintenance_loop())
     yield
+    maintenance_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await maintenance_task
     await engine.dispose()
     logger.info("Database connection pool kapatıldı")
 
@@ -61,5 +87,39 @@ async def health_check(db: AsyncSession = Depends(get_db)) -> dict:
     try:
         await db.execute(text("SELECT 1"))
         return {"status": "ok", "database": "connected"}
-    except Exception:
-        raise HTTPException(status_code=503, detail="Database unavailable")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+
+
+@app.get("/install.sh", include_in_schema=False)
+async def agent_install_script() -> FileResponse:
+    """Agent kurulum script'ini dashboard komutları için servis eder."""
+    script_path = AGENT_SOURCE_DIR / "install.sh"
+    if not script_path.exists():
+        raise HTTPException(status_code=404, detail="Agent install script not found")
+    return FileResponse(script_path, media_type="text/x-shellscript")
+
+
+@app.get("/agent.tar.gz", include_in_schema=False)
+async def agent_tarball() -> StreamingResponse:
+    """Agent dosyalarını kurulum script'inin indireceği tarball olarak servis eder."""
+    if not AGENT_SOURCE_DIR.exists():
+        raise HTTPException(status_code=404, detail="Agent source directory not found")
+
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        for path in AGENT_SOURCE_DIR.rglob("*"):
+            if path.is_dir():
+                continue
+            if any(part in {"__pycache__", ".pytest_cache", ".ruff_cache"} for part in path.parts):
+                continue
+            if path.suffix in {".pyc", ".pyo"}:
+                continue
+            tar.add(path, arcname=Path("usalp-agent") / path.relative_to(AGENT_SOURCE_DIR))
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/gzip",
+        headers={"Content-Disposition": "attachment; filename=agent.tar.gz"},
+    )

@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 
-from agent.models import ServiceStatus
+from models import ServiceStatus
 
 log = structlog.get_logger()
 
@@ -31,7 +31,7 @@ def _parse_timestamp(raw: str) -> int | None:
 
     try:
         dt = datetime.strptime(raw, "%a %Y-%m-%d %H:%M:%S %Z")
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
         return int(time.time() - dt.timestamp())
     except (ValueError, OSError):
         return None

@@ -10,17 +10,29 @@ from __future__ import annotations
 
 import re
 from collections import deque
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
 
-from agent.config import LogFileConfig
-from agent.models import LogEntry
+from config import LogFileConfig
+from models import LogEntry
 
 log = structlog.get_logger()
 
 MAX_ENTRIES = 200
+
+
+@dataclass
+class _FileState:
+    """Bir log dosyası için son okunan konumu tutar."""
+
+    inode: int
+    offset: int
+
+
+_FILE_STATES: dict[str, _FileState] = {}
 
 ERROR_PATTERNS: list[re.Pattern[str]] = [
     re.compile(p)
@@ -82,6 +94,41 @@ def _tail(filepath: Path, n: int) -> list[str]:
     return []
 
 
+def _read_incremental(filepath: Path, tail_lines: int) -> list[str]:
+    """İlk okumada tail, sonraki okumada yalnızca yeni satırları döndürür."""
+    try:
+        stat = filepath.stat()
+    except FileNotFoundError:
+        log.warning("log_file_not_found", path=str(filepath))
+        return []
+    except PermissionError:
+        log.warning("log_file_permission_denied", path=str(filepath))
+        return []
+
+    key = str(filepath)
+    previous = _FILE_STATES.get(key)
+
+    if previous is None or previous.inode != stat.st_ino or stat.st_size < previous.offset:
+        lines = _tail(filepath, tail_lines)
+        _FILE_STATES[key] = _FileState(inode=stat.st_ino, offset=stat.st_size)
+        return lines
+
+    if stat.st_size == previous.offset:
+        return []
+
+    try:
+        with filepath.open("r", encoding="utf-8", errors="strict") as fh:
+            fh.seek(previous.offset)
+            lines = fh.readlines()
+            _FILE_STATES[key] = _FileState(inode=stat.st_ino, offset=fh.tell())
+            return lines
+    except PermissionError:
+        log.warning("log_file_permission_denied", path=str(filepath))
+    except UnicodeDecodeError:
+        log.warning("log_file_binary_skipped", path=str(filepath))
+    return []
+
+
 def _extract_level(line: str) -> str:
     """Satırdan log seviyesini çıkarır, bulamazsa ``'UNKNOWN'`` döner."""
     match = _LEVEL_PATTERN.search(line)
@@ -132,7 +179,7 @@ def read_logs(configs: list[LogFileConfig]) -> list[LogEntry]:
 
     for cfg in configs:
         filepath = Path(cfg.path)
-        lines = _tail(filepath, cfg.tail_lines)
+        lines = _read_incremental(filepath, cfg.tail_lines)
 
         for raw_line in lines:
             raw_line = raw_line.rstrip("\n")

@@ -12,13 +12,13 @@ import httpx
 import pytest
 from tenacity import RetryError
 
-from agent.config import AgentConfig
-from agent.models import (
+from config import AgentConfig
+from models import (
     CpuMetrics,
     MemoryMetrics,
     MetricPayload,
 )
-from agent.sender.http_sender import ClientError, send_metrics
+from sender.http_sender import ClientError, send_metrics
 
 
 @pytest.fixture()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent.config import AgentConfig, LogFileConfig
+from config import AgentConfig, LogFileConfig
 
 
 @pytest.fixture()

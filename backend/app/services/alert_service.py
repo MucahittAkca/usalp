@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
 from app.models.alert import Alert
+from app.models.server import Server
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,7 @@ async def resolve_alert(db: AsyncSession, alert_id: int) -> Alert:
     if alert.resolved_at is None:
         alert.resolved_at = datetime.now(UTC)
         await db.flush()
+        await sync_server_status_from_alerts(db, alert.server_id)
         logger.info("Alert çözüldü: id=%d type=%s", alert.id, alert.type)
     return alert
 
@@ -130,8 +132,63 @@ async def auto_resolve_by_type(
     result = await db.execute(stmt)
     count = result.rowcount
     if count:
+        await sync_server_status_from_alerts(db, server_id)
         logger.info(
             "Otomatik çözümleme: server=%d type=%s adet=%d",
             server_id, alert_type, count,
         )
     return count
+
+
+async def sync_server_status_from_alerts(db: AsyncSession, server_id: int) -> None:
+    """Aktif alert varsa online sunucuyu warning olarak işaretler."""
+    server = await db.get(Server, server_id)
+    if not server or server.status == "offline":
+        return
+
+    active_alert = await db.scalar(
+        select(Alert.id)
+        .where(Alert.server_id == server_id, Alert.resolved_at.is_(None))
+        .limit(1)
+    )
+    server.status = "warning" if active_alert else "online"
+    await db.flush()
+
+
+async def auto_resolve_by_dedupe_key(
+    db: AsyncSession, server_id: int, dedupe_key: str,
+) -> int:
+    """Belirli dedupe key'e sahip aktif alert'i otomatik çözümler."""
+    stmt = (
+        update(Alert)
+        .where(
+            Alert.server_id == server_id,
+            Alert.dedupe_key == dedupe_key,
+            Alert.resolved_at.is_(None),
+        )
+        .values(resolved_at=datetime.now(UTC))
+    )
+    result = await db.execute(stmt)
+    if result.rowcount:
+        await sync_server_status_from_alerts(db, server_id)
+    return result.rowcount or 0
+
+
+async def auto_resolve_missing_dedupe_keys(
+    db: AsyncSession,
+    server_id: int,
+    alert_type: str,
+    active_keys: set[str],
+) -> int:
+    """Mevcut payload'da artık görünmeyen scoped alert'leri çözümler."""
+    stmt = update(Alert).where(
+        Alert.server_id == server_id,
+        Alert.type == alert_type,
+        Alert.resolved_at.is_(None),
+    )
+    if active_keys:
+        stmt = stmt.where(Alert.dedupe_key.not_in(active_keys))
+    result = await db.execute(stmt.values(resolved_at=datetime.now(UTC)))
+    if result.rowcount:
+        await sync_server_status_from_alerts(db, server_id)
+    return result.rowcount or 0

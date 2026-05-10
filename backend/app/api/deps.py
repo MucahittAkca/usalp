@@ -29,7 +29,12 @@ async def verify_agent_api_key(
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key format")
 
-    server = await db.scalar(select(Server).where(Server.api_key == token))
+    server = await db.scalar(
+        select(Server).where(
+            Server.api_key == token,
+            Server.api_key_revoked_at.is_(None),
+        )
+    )
     if not server:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
     return server

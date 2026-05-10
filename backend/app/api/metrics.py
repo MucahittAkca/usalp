@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import verify_agent_api_key
@@ -22,13 +22,12 @@ router = APIRouter(tags=["metrics"])
 @router.post("/metrics", status_code=202)
 async def receive_metrics(
     payload: MetricPayload,
-    background_tasks: BackgroundTasks,
     server: Server = Depends(verify_agent_api_key),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Agent'tan metrik alır, DB'ye yazar ve eşik kontrolünü tetikler.
 
-    1. Sunucu durumunu active yap
+    1. Sunucu durumunu online yap
     2. Metrik kaydını yaz
     3. Servis durumlarını güncelle
     4. Log entry'lerini kaydet
@@ -38,10 +37,9 @@ async def receive_metrics(
     await metric_service.save_metric(db, server.id, payload)
     await metric_service.update_services(db, server.id, payload.services)
     await metric_service.save_logs(db, server.id, payload.log_entries)
-
-    background_tasks.add_task(alert_engine.check_thresholds, db, server.id, payload)
+    created_alerts = await alert_engine.check_thresholds(db, server.id, payload)
 
     return {
-        "data": {"status": "accepted"},
+        "data": {"status": "accepted", "alerts_changed": len(created_alerts)},
         "meta": {"timestamp": datetime.now(UTC).isoformat()},
     }

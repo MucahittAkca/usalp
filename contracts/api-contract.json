@@ -1,0 +1,16 @@
+{
+  "server_statuses": ["online", "offline", "warning"],
+  "service_statuses": ["active", "inactive", "failed", "activating", "deactivating", "reloading", "unknown"],
+  "alert_severities": ["warning", "critical"],
+  "alert_types": ["cpu_threshold", "ram_threshold", "disk_threshold", "service_failed", "critical_log_burst"],
+  "ai_severities": ["low", "medium", "high", "critical"],
+  "ai_categories": [
+    "network_error",
+    "disk_issue",
+    "permission_issue",
+    "config_error",
+    "dependency_failure",
+    "resource_exhaustion",
+    "unknown"
+  ]
+}

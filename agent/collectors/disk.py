@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 import psutil
 
-from agent.models import DiskMetrics
+from models import DiskMetrics
 
 _VIRTUAL_FS_TYPES = frozenset({"tmpfs", "devtmpfs", "squashfs"})
 

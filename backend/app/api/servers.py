@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
@@ -17,9 +18,22 @@ from app.models.metric import Metric
 from app.models.server import Server
 from app.models.service_status import ServiceStatus
 from app.schemas.metric import MetricOut
-from app.schemas.server import LogEntryOut, ServerOut, ServiceStatusOut
+from app.schemas.server import (
+    LogEntryOut,
+    ServerApiKeyOut,
+    ServerCreate,
+    ServerCreatedOut,
+    ServerOut,
+    ServiceStatusOut,
+)
+from app.services import server_status
 
 router = APIRouter(tags=["servers"])
+
+
+def _generate_api_key() -> str:
+    """Agent için tek kullanımlık API anahtarı üretir."""
+    return f"usalp-{secrets.token_hex(16)}"
 
 
 async def _get_server_or_404(db: AsyncSession, server_id: int) -> Server:
@@ -28,6 +42,37 @@ async def _get_server_or_404(db: AsyncSession, server_id: int) -> Server:
     if not server:
         raise NotFoundError("Server", server_id)
     return server
+
+
+# ---- POST /servers ----
+
+
+@router.post("/servers", status_code=201)
+async def create_server(
+    body: ServerCreate,
+    db: AsyncSession = Depends(get_db),
+    _user: str = Depends(get_current_user),
+) -> dict:
+    """Yeni sunucu kaydı oluşturur ve api_key döndürür.
+
+    api_key yalnızca bu yanıtta görünür — sonradan sorgulanamaz.
+    """
+    api_key = _generate_api_key()
+    server = Server(
+        name=body.name,
+        hostname=body.hostname,
+        ip_address=body.ip_address,
+        api_key=api_key,
+        status="offline",
+    )
+    db.add(server)
+    await db.flush()
+    await db.refresh(server)
+
+    return {
+        "data": ServerCreatedOut.model_validate(server).model_dump(),
+        "meta": {"timestamp": datetime.now(UTC).isoformat()},
+    }
 
 
 # ---- GET /servers ----
@@ -41,6 +86,8 @@ async def list_servers(
     _user: str = Depends(get_current_user),
 ) -> dict:
     """Kayıtlı sunucuların sayfalı listesini döndürür."""
+    await server_status.mark_stale_servers_offline(db)
+
     total = await db.scalar(select(func.count(Server.id)))
 
     stmt = (
@@ -68,7 +115,52 @@ async def get_server(
     _user: str = Depends(get_current_user),
 ) -> dict:
     """Belirli bir sunucunun detayını döndürür."""
+    await server_status.mark_stale_servers_offline(db)
     server = await _get_server_or_404(db, server_id)
+    return {
+        "data": ServerOut.model_validate(server).model_dump(),
+        "meta": {"timestamp": datetime.now(UTC).isoformat()},
+    }
+
+
+# ---- POST /servers/{server_id}/rotate-key ----
+
+
+@router.post("/servers/{server_id}/rotate-key")
+async def rotate_server_key(
+    server_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: str = Depends(get_current_user),
+) -> dict:
+    """Sunucunun agent API anahtarını yeniler; yeni anahtar yalnızca bu yanıtta görünür."""
+    server = await _get_server_or_404(db, server_id)
+    server.api_key = _generate_api_key()
+    server.api_key_revoked_at = None
+    server.status = "offline"
+    server.last_seen = None
+    await db.flush()
+
+    return {
+        "data": ServerApiKeyOut(id=server.id, api_key=server.api_key).model_dump(),
+        "meta": {"timestamp": datetime.now(UTC).isoformat()},
+    }
+
+
+# ---- PATCH /servers/{server_id}/revoke-key ----
+
+
+@router.patch("/servers/{server_id}/revoke-key")
+async def revoke_server_key(
+    server_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: str = Depends(get_current_user),
+) -> dict:
+    """Sunucunun mevcut agent API anahtarını iptal eder."""
+    server = await _get_server_or_404(db, server_id)
+    server.api_key_revoked_at = datetime.now(UTC)
+    server.status = "offline"
+    await db.flush()
+
     return {
         "data": ServerOut.model_validate(server).model_dump(),
         "meta": {"timestamp": datetime.now(UTC).isoformat()},

@@ -16,8 +16,8 @@ from tenacity import (
     wait_exponential,
 )
 
-from agent.config import AgentConfig
-from agent.models import MetricPayload
+from config import AgentConfig
+from models import MetricPayload
 
 log = structlog.get_logger()
 
@@ -56,7 +56,11 @@ def send_metrics(payload: MetricPayload, config: AgentConfig) -> bool:
             "Content-Type": "application/json",
         },
         timeout=httpx.Timeout(
-            _READ_TIMEOUT, connect=_CONNECT_TIMEOUT, read=_READ_TIMEOUT, write=_READ_TIMEOUT, pool=_CONNECT_TIMEOUT
+            _READ_TIMEOUT,
+            connect=_CONNECT_TIMEOUT,
+            read=_READ_TIMEOUT,
+            write=_READ_TIMEOUT,
+            pool=_CONNECT_TIMEOUT,
         ),
     )
 

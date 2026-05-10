@@ -5,7 +5,6 @@ Backend API'ye gönderilen tüm metrik, servis, log ve
 """
 
 from datetime import UTC, datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -72,7 +71,7 @@ class ServiceStatus(BaseModel):
     name: str
     status: str
     sub_state: str
-    since_seconds: Optional[int] = None
+    since_seconds: int | None = None
 
 
 class LogEntry(BaseModel):

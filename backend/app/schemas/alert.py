@@ -18,6 +18,7 @@ class AlertOut(BaseModel):
     id: int
     server_id: int
     type: str
+    dedupe_key: str
     severity: str
     message: str
     resolved_at: datetime | None

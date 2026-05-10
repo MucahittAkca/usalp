@@ -165,7 +165,14 @@ async def test_list_alerts_response_format(
     assert "meta" in body
     alert = body["data"][0]
     assert set(alert.keys()) == {
-        "id", "server_id", "type", "severity", "message", "resolved_at", "created_at",
+        "id",
+        "server_id",
+        "type",
+        "dedupe_key",
+        "severity",
+        "message",
+        "resolved_at",
+        "created_at",
     }
 
 
@@ -660,7 +667,7 @@ async def test_engine_auto_resolves_disk_when_normal(
 async def test_engine_warning_to_critical_escalation(
     mock_ai: AsyncMock, db_session: AsyncSession,
 ) -> None:
-    """CPU warning alert aktifken critical'a yükselince yeni alert oluşmaz (aynı tip)."""
+    """CPU warning alert aktifken critical'a yükselince mevcut alert güncellenir."""
     server = await _seed_server(db_session)
 
     warn = MetricPayload(**_make_payload(cpu__percent=85.0))
@@ -671,7 +678,10 @@ async def test_engine_warning_to_critical_escalation(
     crit = MetricPayload(**_make_payload(cpu__percent=95.0))
     alerts_c = await alert_engine.check_thresholds(db_session, server.id, crit)
     await db_session.commit()
-    assert len([a for a in alerts_c if a.type == "cpu_threshold"]) == 0
+    cpu_alerts = [a for a in alerts_c if a.type == "cpu_threshold"]
+    assert len(cpu_alerts) == 1
+    assert cpu_alerts[0].severity == "critical"
+    mock_ai.assert_called_once()
 
     total = await db_session.execute(
         select(Alert).where(Alert.type == "cpu_threshold", Alert.resolved_at.is_(None))
