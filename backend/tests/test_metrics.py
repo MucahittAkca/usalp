@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
@@ -18,7 +19,7 @@ from app.models.metric import Metric
 from app.models.server import Server
 from app.models.service_status import ServiceStatus
 from app.schemas.metric import LogData, MetricPayload, ServiceData
-from app.services import alert_engine, metric_service
+from app.services import alert_engine, metric_service, metric_stream
 
 SAMPLE_PAYLOAD = {
     "server_id": "web-01",
@@ -145,6 +146,59 @@ async def test_post_metrics_response_format(client: AsyncClient, db_session: Asy
     assert "data" in body
     assert "meta" in body
     assert isinstance(body["meta"]["timestamp"], str)
+
+
+@pytest.mark.asyncio
+async def test_post_metrics_publishes_live_metric(
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """Başarılı metrik POST'u canlı metrik hub'ına özet metric event'i yollar."""
+    server = await _seed_server(db_session)
+    queue = await metric_stream.hub.subscribe(server.id)
+    try:
+        resp = await client.post(
+            "/api/v1/metrics",
+            json=SAMPLE_PAYLOAD,
+            headers={"Authorization": "Bearer test-api-key-123"},
+        )
+        assert resp.status_code == 202
+
+        metric = await asyncio.wait_for(queue.get(), timeout=1)
+        assert metric.server_id == server.id
+        assert metric.cpu_percent == pytest.approx(SAMPLE_PAYLOAD["cpu"]["percent"])
+        assert metric.ram_percent == pytest.approx(SAMPLE_PAYLOAD["memory"]["percent"])
+    finally:
+        await metric_stream.hub.unsubscribe(server.id, queue)
+
+
+@pytest.mark.asyncio
+@patch("app.services.alert_engine.ai_analyzer.trigger_analysis", new_callable=AsyncMock)
+@patch("app.api.metrics.alert_notifications.notify_alerts", new_callable=AsyncMock)
+async def test_post_metrics_schedules_alert_notifications(
+    mock_notify: AsyncMock,
+    mock_ai: AsyncMock,
+    client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    """Yeni alert oluşursa notification background task'ı snapshot veriyle çalışır."""
+    await _seed_server(db_session)
+    payload = _make_payload(cpu__percent=95.0)
+
+    resp = await client.post(
+        "/api/v1/metrics",
+        json=payload,
+        headers={"Authorization": "Bearer test-api-key-123"},
+    )
+
+    assert resp.status_code == 202
+    mock_ai.assert_called_once()
+    mock_notify.assert_awaited_once()
+    notifications = mock_notify.await_args.args[0]
+    assert len(notifications) == 1
+    assert notifications[0].alert_type == "cpu_threshold"
+    assert notifications[0].severity == "critical"
+    assert notifications[0].server_name == "web-01"
 
 
 @pytest.mark.asyncio

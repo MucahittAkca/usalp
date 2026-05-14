@@ -21,7 +21,7 @@ export default function ServersPage() {
           <AddServerModal onCreated={() => setRefreshKey((k) => k + 1)} />
         </div>
 
-        <ServerList key={refreshKey} />
+        <ServerList key={refreshKey} showFilters />
       </div>
     </AppShell>
   );

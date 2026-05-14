@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { RefreshCw, ScrollText } from "lucide-react";
 import { useServerLogs } from "@/hooks/useServerLogs";
@@ -20,6 +20,17 @@ const ROW_HEIGHT = 32;
 
 /** Ekranda gösterilecek maksimum yükseklik */
 const VIEWER_HEIGHT = 480;
+
+function useDebouncedValue(value: string, delayMs: number): string {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+
+  return debounced;
+}
 
 // ---------------------------------------------------------------------------
 // Loading iskeleti
@@ -53,25 +64,24 @@ export function LogViewer({ serverId }: LogViewerProps) {
     ...ALL_LOG_LEVELS,
   ]);
   const [searchTerm, setSearchTerm] = useState("");
+  const debouncedSearch = useDebouncedValue(searchTerm.trim(), 300);
+  const backendLevel = selectedLevels.length === 1 ? selectedLevels[0] : undefined;
 
   const { logs, total, isLoading, error, mutate } = useServerLogs(serverId, {
+    level: backendLevel,
+    q: debouncedSearch || undefined,
     perPage: 200,
   });
 
   // ---------------------------------------------------------------------------
-  // Client-side filtreleme
+  // Çoklu seviye filtresi UI tarafında uygulanır; metin araması backend'dedir.
   // ---------------------------------------------------------------------------
   const filtered = useMemo(() => {
-    const lowerSearch = searchTerm.toLowerCase();
     return logs.filter((log) => {
       const levelMatch = selectedLevels.includes(log.level as LogLevel);
-      const searchMatch =
-        lowerSearch === "" ||
-        log.message.toLowerCase().includes(lowerSearch) ||
-        log.source_file.toLowerCase().includes(lowerSearch);
-      return levelMatch && searchMatch;
+      return levelMatch;
     });
-  }, [logs, selectedLevels, searchTerm]);
+  }, [logs, selectedLevels]);
 
   // ---------------------------------------------------------------------------
   // Level toggle

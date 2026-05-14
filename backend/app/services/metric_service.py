@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import as_naive_utc
 from app.models.log_entry import LogEntry
 from app.models.metric import Metric
 from app.models.server import Server
@@ -46,7 +47,7 @@ async def save_metric(db: AsyncSession, server_id: int, payload: MetricPayload) 
         load_avg_5=payload.cpu.load_avg_5,
         load_avg_15=payload.cpu.load_avg_15,
         raw_json=payload.model_dump(mode="json"),
-        recorded_at=payload.collected_at,
+        recorded_at=as_naive_utc(payload.collected_at),
     )
     db.add(metric)
     await db.flush()
@@ -89,7 +90,7 @@ async def save_logs(
                 LogEntry.server_id == server_id,
                 LogEntry.source_file == entry.source_file,
                 LogEntry.raw_line == entry.raw_line,
-                LogEntry.logged_at == entry.logged_at,
+                LogEntry.logged_at == as_naive_utc(entry.logged_at),
             )
             .limit(1)
         )
@@ -101,7 +102,7 @@ async def save_logs(
             level=entry.level,
             message=entry.message,
             raw_line=entry.raw_line,
-            logged_at=entry.logged_at,
+            logged_at=as_naive_utc(entry.logged_at),
         )
         db.add(record)
         count += 1

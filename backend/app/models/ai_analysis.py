@@ -31,6 +31,7 @@ class AIAnalysis(Base):
     severity: Mapped[str] = mapped_column(String(20))
     summary: Mapped[str] = mapped_column(Text)
     causes: Mapped[str] = mapped_column(Text)
+    evidence_lines: Mapped[str] = mapped_column(Text, default="[]")
     commands: Mapped[str] = mapped_column(Text)
     confidence: Mapped[float] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())

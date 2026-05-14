@@ -22,7 +22,7 @@ from collectors import cpu, disk, memory, network, process, services
 from config import AgentConfig, LogFileConfig, load_config
 from models import MetricPayload
 from readers.log_reader import read_logs
-from sender.http_sender import ClientError, send_metrics
+from sender.disk_queue import enqueue_and_flush
 
 log = structlog.get_logger()
 
@@ -103,12 +103,13 @@ def _fast_cycle(config: AgentConfig) -> None:
     )
 
     try:
-        send_metrics(payload, config)
-    except ClientError:
-        log.error("send_dropped_client_error", server_id=config.server_id)
+        flushed = enqueue_and_flush(payload, config)
     except Exception:
-        # TODO(v2): local SQLite buffer ile retry kuyruğu
-        log.exception("send_failed_dropping", server_id=config.server_id)
+        log.exception("queue_persist_or_flush_failed", server_id=config.server_id)
+        return
+
+    if not flushed:
+        log.warning("queue_flush_incomplete", server_id=config.server_id)
 
 
 def main() -> None:
@@ -136,6 +137,7 @@ def main() -> None:
         backend_url=config.backend_url,
         fast_interval=config.intervals.fast,
         slow_interval=config.intervals.slow,
+        queue_dir=config.queue.dir,
     )
 
     _slow_cycle(config)

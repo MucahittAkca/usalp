@@ -34,12 +34,31 @@ class Settings(BaseSettings):
     ALERT_DISK_WARNING: float = 85.0
     ALERT_DISK_CRITICAL: float = 95.0
 
+    # Alert bildirimleri (kanal alanları boşsa ilgili kanal devre dışı kalır)
+    ALERT_NOTIFICATIONS_ENABLED: bool = True
+    ALERT_NOTIFICATION_TIMEOUT_SECONDS: float = 5.0
+    ALERT_EMAIL_HOST: str = ""
+    ALERT_EMAIL_PORT: int = 587
+    ALERT_EMAIL_USERNAME: str = ""
+    ALERT_EMAIL_PASSWORD: str = ""
+    ALERT_EMAIL_FROM: str = ""
+    ALERT_EMAIL_TO: str = ""
+    ALERT_EMAIL_USE_SSL: bool = False
+    ALERT_EMAIL_STARTTLS: bool = True
+    ALERT_TELEGRAM_BOT_TOKEN: str = ""
+    ALERT_TELEGRAM_CHAT_ID: str = ""
+    ALERT_SLACK_WEBHOOK_URL: str = ""
+
     # Veri saklama / bakım
     METRIC_RETENTION_DAYS: int = 30
     LOG_RETENTION_DAYS: int = 14
     SERVICE_STATUS_RETENTION_DAYS: int = 7
     AI_ANALYSIS_RETENTION_DAYS: int = 90
     RETENTION_SWEEP_INTERVAL_SECONDS: int = 3600
+
+    # Demo modu
+    DEMO_MODE: bool = False
+    DEMO_SEED_RESET: bool = True
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
@@ -54,10 +73,10 @@ class Settings(BaseSettings):
             and self.DASHBOARD_USERNAME == "admin"
             and self.DASHBOARD_PASSWORD == "admin"
         )
-        if insecure_secret or insecure_password:
+        if insecure_secret or insecure_password or self.DEMO_MODE:
             raise ValueError(
                 "Production ortamında SECRET_KEY ve dashboard şifresi/hash'i "
-                "güvenli değerlerle tanımlanmalıdır."
+                "güvenli değerlerle tanımlanmalı ve DEMO_MODE kapalı olmalıdır."
             )
 
 

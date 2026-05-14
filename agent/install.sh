@@ -66,6 +66,7 @@ fi
 
 info "Kurulum dizini oluşturuluyor: $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR/queue"
 
 # --------------------------------------------------------------------------
 # Agent dosyalarını indir / kopyala
@@ -122,6 +123,11 @@ api_key: ${API_KEY}
 intervals:
   fast: 30
   slow: 60
+
+queue:
+  dir: queue
+  max_items: 1000
+  flush_batch_size: 25
 
 services:
   - nginx

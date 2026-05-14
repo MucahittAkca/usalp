@@ -1,6 +1,6 @@
 "use client";
 
-import { Brain, Clock, RefreshCw, Terminal } from "lucide-react";
+import { Brain, Clock, FileText, RefreshCw, Terminal } from "lucide-react";
 import { useAiAnalysis } from "@/hooks/useAiAnalysis";
 import { ConfidenceBar } from "./ConfidenceBar";
 import { CauseList } from "./CauseList";
@@ -67,6 +67,28 @@ function AnalysisCard({ analysis, highlight }: { analysis: AiAnalysis; highlight
       {/* Olası nedenler */}
       <CauseList causes={analysis.causes} />
 
+      {/* Kanıt satırları */}
+      {analysis.evidence_lines.length > 0 && (
+        <div>
+          <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+            <FileText size={11} />
+            Kanıt Satırları
+          </h4>
+          <div className="space-y-1.5">
+            {analysis.evidence_lines.map((line, i) => (
+              <div
+                key={i}
+                className="rounded-md border border-slate-200 bg-white px-3 py-2"
+              >
+                <code className="block whitespace-pre-wrap break-words font-mono text-xs leading-5 text-slate-600">
+                  {line}
+                </code>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Önerilen komutlar */}
       {analysis.commands.length > 0 && (
         <div>
@@ -79,9 +101,6 @@ function AnalysisCard({ analysis, highlight }: { analysis: AiAnalysis; highlight
               <CommandBlock key={i} command={cmd} />
             ))}
           </div>
-          <p className="mt-2 text-[11px] text-slate-400 italic">
-            ↑ Bu komutları kopyalayıp terminalde çalıştırın
-          </p>
         </div>
       )}
 

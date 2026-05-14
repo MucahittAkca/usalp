@@ -9,11 +9,16 @@ import { ServiceList } from "@/components/services/ServiceList";
 import { LogViewer } from "@/components/logs/LogViewer";
 import { AnalysisPanel } from "@/components/ai/AnalysisPanel";
 import { ServerStatusBadge } from "@/components/servers/ServerStatusBadge";
-import { useServerMetrics } from "@/hooks/useServerMetrics";
+import { useServerMetrics, type MetricRange } from "@/hooks/useServerMetrics";
 import { api } from "@/lib/api";
-import { cn, formatDateTime } from "@/lib/utils";
+import {
+  SERVER_ENVIRONMENT_COLORS,
+  SERVER_ENVIRONMENT_LABELS,
+  cn,
+  formatDateTime,
+} from "@/lib/utils";
 import type { ApiResponse, Server } from "@/types/api";
-import { Ban, KeyRound, Monitor } from "lucide-react";
+import { Ban, Boxes, KeyRound, Monitor, Tag } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Sekme tanımları
@@ -79,6 +84,7 @@ export default function ServerDetailPage({ params }: ServerDetailPageProps) {
   const [newApiKey, setNewApiKey] = useState<string | null>(null);
   const [keyActionError, setKeyActionError] = useState<string | null>(null);
   const [keyActionLoading, setKeyActionLoading] = useState<"rotate" | "revoke" | null>(null);
+  const [metricRange, setMetricRange] = useState<MetricRange>("1h");
 
   useEffect(() => {
     const updateActiveTab = () => setActiveTab(getActiveTab(window.location.hash));
@@ -98,9 +104,16 @@ export default function ServerDetailPage({ params }: ServerDetailPageProps) {
     { refreshInterval: 30_000 },
   );
 
-  const { metrics, isLoading: metricsLoading } = useServerMetrics(serverId);
+  const { metrics, isLoading: metricsLoading } = useServerMetrics(serverId, metricRange);
 
   const server = serverData?.data;
+  const envLabel = server
+    ? SERVER_ENVIRONMENT_LABELS[server.environment] ?? server.environment
+    : "";
+  const envClass = server
+    ? SERVER_ENVIRONMENT_COLORS[server.environment] ??
+      "border-slate-200 bg-slate-50 text-slate-600"
+    : "";
 
   async function rotateKey() {
     setKeyActionLoading("rotate");
@@ -160,6 +173,31 @@ export default function ServerDetailPage({ params }: ServerDetailPageProps) {
                   <p className="text-sm text-slate-400">
                     {server.hostname} · {server.ip_address}
                   </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    <span
+                      className={cn(
+                        "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                        envClass,
+                      )}
+                    >
+                      {envLabel}
+                    </span>
+                    {server.group_name && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                        <Boxes size={10} />
+                        {server.group_name}
+                      </span>
+                    )}
+                    {server.tags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500"
+                      >
+                        <Tag size={10} />
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               </div>
               <div className="flex flex-col items-end gap-2">
@@ -220,7 +258,12 @@ export default function ServerDetailPage({ params }: ServerDetailPageProps) {
         {/* İçerik */}
         <div className="flex-1 px-6 py-6">
           {activeTab === "metrics" && (
-            <MetricGrid metrics={metrics} isLoading={metricsLoading} />
+            <MetricGrid
+              metrics={metrics}
+              isLoading={metricsLoading}
+              range={metricRange}
+              onRangeChange={setMetricRange}
+            />
           )}
           {activeTab === "services" && (
             <ServiceList serverId={serverId} />

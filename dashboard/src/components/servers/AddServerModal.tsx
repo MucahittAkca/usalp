@@ -19,11 +19,25 @@ export function AddServerModal({ onCreated }: Props) {
   const [created, setCreated] = useState<ServerCreated | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const [form, setForm] = useState({ name: "", hostname: "", ip_address: "" });
+  const [form, setForm] = useState({
+    name: "",
+    hostname: "",
+    ip_address: "",
+    environment: "production",
+    group_name: "",
+    tags: "",
+  });
 
   function openModal() {
     setStep("form");
-    setForm({ name: "", hostname: "", ip_address: "" });
+    setForm({
+      name: "",
+      hostname: "",
+      ip_address: "",
+      environment: "production",
+      group_name: "",
+      tags: "",
+    });
     setError(null);
     setCreated(null);
     setCopied(false);
@@ -43,7 +57,17 @@ export function AddServerModal({ onCreated }: Props) {
     setError(null);
 
     try {
-      const res = await api.servers.create(form);
+      const res = await api.servers.create({
+        name: form.name,
+        hostname: form.hostname,
+        ip_address: form.ip_address,
+        environment: form.environment,
+        group_name: form.group_name,
+        tags: form.tags
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+      });
       setCreated(res.data);
       setStep("success");
     } catch (err) {
@@ -89,7 +113,7 @@ export function AddServerModal({ onCreated }: Props) {
           />
 
           {/* Modal */}
-          <div className="relative z-10 w-full max-w-lg mx-4 bg-white rounded-2xl shadow-2xl">
+          <div className="relative z-10 w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto bg-white rounded-2xl shadow-2xl">
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-5 border-b border-slate-100">
               <div className="flex items-center gap-3">
@@ -162,6 +186,56 @@ export function AddServerModal({ onCreated }: Props) {
                       value={form.ip_address}
                       onChange={(e) =>
                         setForm((f) => ({ ...f, ip_address: e.target.value }))
+                      }
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                        Ortam
+                      </label>
+                      <select
+                        value={form.environment}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, environment: e.target.value }))
+                        }
+                        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                      >
+                        <option value="production">Production</option>
+                        <option value="staging">Staging</option>
+                        <option value="development">Development</option>
+                        <option value="test">Test</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                        Grup
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="edge"
+                        value={form.group_name}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, group_name: e.target.value }))
+                        }
+                        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                      Etiketler
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="nginx, public, eu-west"
+                      value={form.tags}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, tags: e.target.value }))
                       }
                       className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
                     />

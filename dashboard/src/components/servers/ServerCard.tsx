@@ -1,8 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { AlertTriangle, ArrowRight, Globe, Server } from "lucide-react";
-import { cn, metricBarColor, metricColor } from "@/lib/utils";
+import { AlertTriangle, ArrowRight, Boxes, Globe, Server, Tag } from "lucide-react";
+import {
+  SERVER_ENVIRONMENT_COLORS,
+  SERVER_ENVIRONMENT_LABELS,
+  cn,
+  metricBarColor,
+  metricColor,
+} from "@/lib/utils";
 import { useLatestMetric } from "@/hooks/useServerMetrics";
 import { useAlerts } from "@/hooks/useAlerts";
 import { ServerStatusBadge } from "@/components/servers/ServerStatusBadge";
@@ -95,6 +101,10 @@ function MetricsSection({ serverId, offline }: { serverId: number; offline: bool
 export function ServerCard({ server }: ServerCardProps) {
   const offline = server.status === "offline";
   const { activeCount, criticalCount } = useAlerts(server.id);
+  const envLabel = SERVER_ENVIRONMENT_LABELS[server.environment] ?? server.environment;
+  const envClass =
+    SERVER_ENVIRONMENT_COLORS[server.environment] ??
+    "border-slate-200 bg-slate-50 text-slate-600";
 
   return (
     <Link
@@ -135,6 +145,37 @@ export function ServerCard({ server }: ServerCardProps) {
       <div className="flex items-center gap-1.5 text-xs text-slate-500">
         <Globe size={12} aria-hidden="true" />
         <span className="font-mono">{server.ip_address}</span>
+      </div>
+
+      <div className="flex min-h-6 flex-wrap items-center gap-1.5">
+        <span
+          className={cn(
+            "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium",
+            envClass,
+          )}
+        >
+          {envLabel}
+        </span>
+        {server.group_name && (
+          <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+            <Boxes size={10} aria-hidden="true" />
+            {server.group_name}
+          </span>
+        )}
+        {server.tags.slice(0, 2).map((tag) => (
+          <span
+            key={tag}
+            className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500"
+          >
+            <Tag size={10} aria-hidden="true" />
+            {tag}
+          </span>
+        ))}
+        {server.tags.length > 2 && (
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-400">
+            +{server.tags.length - 2}
+          </span>
+        )}
       </div>
 
       {/* Metrikler */}

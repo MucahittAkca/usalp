@@ -16,7 +16,7 @@ from app.models.log_entry import LogEntry
 from app.models.metric import Metric
 from app.models.server import Server
 from app.models.service_status import ServiceStatus
-from app.schemas.ai_analysis import AiAnalysisResult, CommandSuggestion
+from app.schemas.ai_analysis import AIAnalysisOut, AiAnalysisResult, CommandSuggestion
 from app.services.ai_analyzer import (
     AI_COOLDOWN_SECONDS,
     MAX_CONTEXT_CHARS,
@@ -41,9 +41,17 @@ VALID_AI_OUTPUT: dict = {
         "nginx.conf dosyasında söz dizimi hatası",
         "Yanlış upstream tanımı",
     ],
+    "evidence_lines": [
+        "[ERROR] /var/log/nginx/error.log: Connection refused upstream",
+        "[FAILED] nginx",
+    ],
     "suggested_commands": [
-        {"command": "nginx -t", "description": "Yapılandırmayı doğrula"},
-        {"command": "journalctl -u nginx --no-pager -n 50", "description": "Son logları incele"},
+        {"command": "nginx -t", "description": "Yapılandırmayı doğrula", "risk_level": "low"},
+        {
+            "command": "journalctl -u nginx --no-pager -n 50",
+            "description": "Son logları incele",
+            "risk_level": "low",
+        },
     ],
     "confidence": 0.85,
 }
@@ -145,7 +153,8 @@ async def _seed_analysis(
     analysis = AIAnalysis(
         server_id=server_id, category="config_error", severity="high",
         summary="Test analiz", causes='["neden1"]',
-        commands='[{"command":"test","description":"test"}]',
+        evidence_lines='["[ERROR] app.log: test"]',
+        commands='[{"command":"test","description":"test","risk_level":"low"}]',
         confidence=0.8,
     )
     db.add(analysis)
@@ -272,8 +281,10 @@ class TestAiAnalysisResult:
         assert result.category == "config_error"
         assert result.confidence == 0.85
         assert len(result.likely_causes) == 2
+        assert len(result.evidence_lines) == 2
         assert len(result.suggested_commands) == 2
         assert isinstance(result.suggested_commands[0], CommandSuggestion)
+        assert result.suggested_commands[0].risk_level == "low"
 
     def test_invalid_severity_rejected(self) -> None:
         with pytest.raises(ValidationError):
@@ -307,6 +318,36 @@ class TestAiAnalysisResult:
         cmds = [{"command": f"cmd{i}", "description": f"desc{i}"} for i in range(7)]
         with pytest.raises(ValidationError):
             AiAnalysisResult(**{**VALID_AI_OUTPUT, "suggested_commands": cmds})
+
+    def test_empty_evidence_lines_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            AiAnalysisResult(**{**VALID_AI_OUTPUT, "evidence_lines": []})
+
+    def test_invalid_command_risk_rejected(self) -> None:
+        cmds = [{"command": "rm -rf /tmp/x", "description": "test", "risk_level": "danger"}]
+        with pytest.raises(ValidationError):
+            AiAnalysisResult(**{**VALID_AI_OUTPUT, "suggested_commands": cmds})
+
+    def test_legacy_command_without_risk_defaults_medium(self) -> None:
+        cmds = [{"command": "nginx -t", "description": "Yapılandırmayı doğrula"}]
+        result = AiAnalysisResult(**{**VALID_AI_OUTPUT, "suggested_commands": cmds})
+        assert result.suggested_commands[0].risk_level == "medium"
+
+    def test_api_schema_parses_legacy_command_without_risk(self) -> None:
+        analysis = AIAnalysisOut(
+            id=1,
+            alert_id=None,
+            server_id=1,
+            category="config_error",
+            severity="high",
+            summary="Test",
+            causes='["neden"]',
+            evidence_lines='["[ERROR] app.log: test"]',
+            commands='[{"command":"nginx -t","description":"test"}]',
+            confidence=0.8,
+            created_at=datetime.now(UTC),
+        )
+        assert analysis.commands[0].risk_level == "medium"
 
     def test_boundary_confidence_zero(self) -> None:
         result = AiAnalysisResult(**{**VALID_AI_OUTPUT, "confidence": 0.0})
@@ -601,9 +642,14 @@ async def test_trigger_analysis_success(
     causes = json.loads(analysis.causes)
     assert len(causes) == 2
 
+    evidence_lines = json.loads(analysis.evidence_lines)
+    assert len(evidence_lines) == 2
+    assert "Connection refused" in evidence_lines[0]
+
     commands = json.loads(analysis.commands)
     assert len(commands) == 2
     assert commands[0]["command"] == "nginx -t"
+    assert commands[0]["risk_level"] == "low"
 
     mock_claude.assert_awaited_once()
 
@@ -780,7 +826,9 @@ async def test_endpoint_analyze_success(
     assert body["data"]["severity"] == "high"
     assert body["data"]["server_id"] == server.id
     assert len(body["data"]["causes"]) == 2
+    assert len(body["data"]["evidence_lines"]) == 2
     assert len(body["data"]["commands"]) == 2
+    assert body["data"]["commands"][0]["risk_level"] == "low"
     assert "timestamp" in body["meta"]
 
 
@@ -850,7 +898,9 @@ async def test_endpoint_analyses_with_data(
     assert analysis["category"] == "config_error"
     assert analysis["severity"] == "high"
     assert isinstance(analysis["causes"], list)
+    assert isinstance(analysis["evidence_lines"], list)
     assert isinstance(analysis["commands"], list)
+    assert analysis["commands"][0]["risk_level"] == "low"
     assert 0 <= analysis["confidence"] <= 1
 
 

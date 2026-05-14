@@ -4,17 +4,19 @@ import type { LogEntry } from "@/types/api";
 
 interface UseServerLogsParams {
   level?: string;
+  q?: string;
   perPage?: number;
 }
 
 export function useServerLogs(serverId: number, params?: UseServerLogsParams) {
-  const { level, perPage = 200 } = params ?? {};
+  const { level, q, perPage = 200 } = params ?? {};
 
   const { data, error, isLoading, mutate } = useSWR(
-    `logs-${serverId}-${level ?? "all"}-${perPage}`,
+    `logs-${serverId}-${level ?? "all"}-${q ?? ""}-${perPage}`,
     () =>
       api.servers.logs(serverId, {
         level,
+        q,
         per_page: perPage,
       }),
     {

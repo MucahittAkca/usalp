@@ -22,6 +22,7 @@ from app.config import settings
 from app.core.exceptions import register_exception_handlers
 from app.database import async_session, engine, get_db
 from app.services import retention, server_status
+from app.services.demo_seed import seed_demo_data
 
 logger = logging.getLogger(__name__)
 AGENT_SOURCE_DIR = Path(os.getenv("AGENT_SOURCE_DIR", "/agent"))
@@ -40,12 +41,37 @@ async def _maintenance_loop() -> None:
         await asyncio.sleep(settings.RETENTION_SWEEP_INTERVAL_SECONDS)
 
 
+async def _seed_demo_data_if_enabled() -> None:
+    """Demo modu açıksa örnek veriyi startup sırasında hazırlar."""
+    if not settings.DEMO_MODE:
+        return
+
+    async with async_session() as session:
+        result = await seed_demo_data(session, reset=settings.DEMO_SEED_RESET)
+        await session.commit()
+
+    if result.skipped:
+        logger.info("Demo seed atlandı: mevcut demo verisi korunuyor")
+        return
+
+    logger.info(
+        "Demo seed tamamlandı: servers=%d metrics=%d logs=%d services=%d alerts=%d analyses=%d",
+        result.servers,
+        result.metrics,
+        result.logs,
+        result.services,
+        result.alerts,
+        result.analyses,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup: DB bağlantısını test et, Shutdown: pool'u kapat."""
     async with engine.connect() as conn:
         await conn.execute(text("SELECT 1"))
     logger.info("Database bağlantısı başarılı")
+    await _seed_demo_data_if_enabled()
     maintenance_task = asyncio.create_task(_maintenance_loop())
     yield
     maintenance_task.cancel()

@@ -4,7 +4,27 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+MAX_TAGS = 20
+MAX_TAG_LENGTH = 40
+
+
+def normalize_tags(tags: list[str]) -> list[str]:
+    """Etiketleri kırpar, tekilleştirir ve boş değerleri atar."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for tag in tags:
+        value = tag.strip().lower()
+        if not value or value in seen:
+            continue
+        if len(value) > MAX_TAG_LENGTH:
+            raise ValueError(f"Tag max {MAX_TAG_LENGTH} karakter olabilir")
+        seen.add(value)
+        normalized.append(value)
+    if len(normalized) > MAX_TAGS:
+        raise ValueError(f"En fazla {MAX_TAGS} tag girilebilir")
+    return normalized
 
 
 class ServerCreate(BaseModel):
@@ -15,6 +35,27 @@ class ServerCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     hostname: str = Field(min_length=1, max_length=255)
     ip_address: str = Field(min_length=7, max_length=45)
+    environment: str = Field(default="production", min_length=1, max_length=50)
+    group_name: str = Field(default="", max_length=100)
+    tags: list[str] = Field(default_factory=list)
+
+    @field_validator("environment")
+    @classmethod
+    def strip_environment(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("environment boş olamaz")
+        return normalized
+
+    @field_validator("group_name")
+    @classmethod
+    def strip_group_name(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, value: list[str]) -> list[str]:
+        return normalize_tags(value)
 
 
 class ServerCreatedOut(BaseModel):
@@ -26,6 +67,9 @@ class ServerCreatedOut(BaseModel):
     name: str
     hostname: str
     ip_address: str
+    environment: str
+    group_name: str
+    tags: list[str]
     status: str
     api_key: str
     last_seen: datetime | None
@@ -41,6 +85,9 @@ class ServerOut(BaseModel):
     name: str
     hostname: str
     ip_address: str
+    environment: str
+    group_name: str
+    tags: list[str]
     status: str
     last_seen: datetime | None
     created_at: datetime

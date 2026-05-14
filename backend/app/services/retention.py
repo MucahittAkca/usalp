@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.time import utc_now_naive
 from app.models.ai_analysis import AIAnalysis
 from app.models.log_entry import LogEntry
 from app.models.metric import Metric
@@ -16,7 +17,7 @@ from app.models.service_status import ServiceStatus
 
 async def cleanup_old_records(db: AsyncSession) -> dict[str, int]:
     """Retention ayarlarına göre eski zaman serisi verilerini siler."""
-    now = datetime.now(UTC)
+    now = utc_now_naive()
     cleanup_plan = [
         (
             "metrics",

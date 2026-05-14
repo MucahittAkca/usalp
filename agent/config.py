@@ -27,6 +27,14 @@ class LogFileConfig(BaseModel):
     min_level: str = "ERROR"
 
 
+class QueueConfig(BaseModel):
+    """Başarısız gönderimler için local disk kuyruğu ayarları."""
+
+    dir: str = "queue"
+    max_items: int = 1000
+    flush_batch_size: int = 25
+
+
 class AgentConfig(BaseModel):
     """Agent'ın tüm çalışma parametrelerini tutan kök model."""
 
@@ -34,6 +42,7 @@ class AgentConfig(BaseModel):
     backend_url: str
     api_key: str
     intervals: IntervalsConfig = IntervalsConfig()
+    queue: QueueConfig = QueueConfig()
     services: list[str] = []
     log_files: list[LogFileConfig] = []
 

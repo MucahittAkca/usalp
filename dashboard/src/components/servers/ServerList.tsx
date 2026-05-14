@@ -1,7 +1,8 @@
 "use client";
 
-import { RefreshCw, ServerOff } from "lucide-react";
-import { useServerList } from "@/hooks/useServerList";
+import { useState } from "react";
+import { Filter, RefreshCw, RotateCcw, ServerOff } from "lucide-react";
+import { useServerList, type ServerListFilters } from "@/hooks/useServerList";
 import { ServerCard } from "@/components/servers/ServerCard";
 
 // ---------------------------------------------------------------------------
@@ -81,23 +82,119 @@ function ErrorState({ onRetry }: { onRetry: () => void }) {
 // Ana bileşen
 // ---------------------------------------------------------------------------
 
-export function ServerList() {
-  const { servers, isLoading, error, mutate } = useServerList();
+interface ServerListProps {
+  showFilters?: boolean;
+}
+
+function hasFilters(filters: ServerListFilters): boolean {
+  return Boolean(filters.environment || filters.group_name || filters.tag);
+}
+
+function ServerFilters({
+  filters,
+  setFilters,
+}: {
+  filters: ServerListFilters;
+  setFilters: React.Dispatch<React.SetStateAction<ServerListFilters>>;
+}) {
+  const active = hasFilters(filters);
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {isLoading &&
-        Array.from({ length: 6 }).map((_, i) => <SkeletonCard key={i} />)}
+    <div className="flex flex-wrap items-end gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3">
+      <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
+        <Filter size={15} className="text-slate-400" />
+        Filtreler
+      </div>
 
-      {error && !isLoading && <ErrorState onRetry={() => mutate()} />}
+      <label className="flex flex-col gap-1">
+        <span className="text-xs font-medium text-slate-500">Ortam</span>
+        <select
+          value={filters.environment ?? ""}
+          onChange={(e) =>
+            setFilters((current) => ({
+              ...current,
+              environment: e.target.value || undefined,
+            }))
+          }
+          className="h-9 min-w-36 rounded-md border border-slate-200 px-2 text-sm text-slate-700 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+        >
+          <option value="">Tümü</option>
+          <option value="production">Production</option>
+          <option value="staging">Staging</option>
+          <option value="development">Development</option>
+          <option value="test">Test</option>
+        </select>
+      </label>
 
-      {!isLoading && !error && servers.length === 0 && <EmptyState />}
+      <label className="flex flex-col gap-1">
+        <span className="text-xs font-medium text-slate-500">Grup</span>
+        <input
+          value={filters.group_name ?? ""}
+          onChange={(e) =>
+            setFilters((current) => ({
+              ...current,
+              group_name: e.target.value.trim() || undefined,
+            }))
+          }
+          placeholder="edge"
+          className="h-9 w-36 rounded-md border border-slate-200 px-2 text-sm text-slate-700 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+        />
+      </label>
 
-      {!isLoading &&
-        !error &&
-        servers.map((server) => (
-          <ServerCard key={server.id} server={server} />
-        ))}
+      <label className="flex flex-col gap-1">
+        <span className="text-xs font-medium text-slate-500">Etiket</span>
+        <input
+          value={filters.tag ?? ""}
+          onChange={(e) =>
+            setFilters((current) => ({
+              ...current,
+              tag: e.target.value.trim() || undefined,
+            }))
+          }
+          placeholder="nginx"
+          className="h-9 w-36 rounded-md border border-slate-200 px-2 text-sm text-slate-700 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+        />
+      </label>
+
+      <button
+        type="button"
+        onClick={() => setFilters({})}
+        disabled={!active}
+        className="inline-flex h-9 items-center gap-1.5 rounded-md bg-slate-100 px-3 text-xs font-medium text-slate-600 hover:bg-slate-200 disabled:opacity-40"
+      >
+        <RotateCcw size={13} />
+        Sıfırla
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Ana bileşen
+// ---------------------------------------------------------------------------
+
+export function ServerList({ showFilters = false }: ServerListProps) {
+  const [filters, setFilters] = useState<ServerListFilters>({});
+  const { servers, isLoading, error, mutate } = useServerList(showFilters ? filters : undefined);
+
+  return (
+    <div className="flex flex-col gap-4">
+      {showFilters && <ServerFilters filters={filters} setFilters={setFilters} />}
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {isLoading &&
+          Array.from({ length: 6 }).map((_, i) => <SkeletonCard key={i} />)}
+
+        {error && !isLoading && <ErrorState onRetry={() => mutate()} />}
+
+        {!isLoading && !error && servers.length === 0 && <EmptyState />}
+
+        {!isLoading &&
+          !error &&
+          servers.map((server) => (
+            <ServerCard key={server.id} server={server} />
+          ))}
+      </div>
     </div>
   );
 }

@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 AISeverity = Literal["low", "medium", "high", "critical"]
+CommandRisk = Literal["low", "medium", "high"]
 AICategory = Literal[
     "network_error",
     "disk_issue",
@@ -25,6 +26,7 @@ class CommandSuggestion(BaseModel):
 
     command: str
     description: str
+    risk_level: CommandRisk = "medium"
 
 
 class AiAnalysisResult(BaseModel):
@@ -41,6 +43,7 @@ class AiAnalysisResult(BaseModel):
     ]
     summary: str = Field(description="1-2 cümle, Türkçe özet")
     likely_causes: list[str] = Field(min_length=1, max_length=5)
+    evidence_lines: list[str] = Field(min_length=1, max_length=8)
     suggested_commands: list[CommandSuggestion] = Field(min_length=1, max_length=6)
     confidence: float = Field(ge=0.0, le=1.0)
 
@@ -57,6 +60,7 @@ class AIAnalysisOut(BaseModel):
     severity: str
     summary: str
     causes: list[str]
+    evidence_lines: list[str]
     commands: list[CommandSuggestion]
     confidence: float = Field(ge=0, le=1)
     created_at: datetime
@@ -65,6 +69,17 @@ class AIAnalysisOut(BaseModel):
     @classmethod
     def parse_causes(cls, v: str | list) -> list[str]:
         """ORM'den gelen JSON-encoded string'i listeye çevirir."""
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return [v] if v else []
+        return v
+
+    @field_validator("evidence_lines", mode="before")
+    @classmethod
+    def parse_evidence_lines(cls, v: str | list) -> list[str]:
+        """ORM'den gelen JSON-encoded string'i kanıt satırı listesine çevirir."""
         if isinstance(v, str):
             try:
                 return json.loads(v)

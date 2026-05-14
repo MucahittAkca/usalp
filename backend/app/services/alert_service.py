@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from sqlalchemy import ColumnElement, case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
+from app.core.time import utc_now_naive
 from app.models.alert import Alert
 from app.models.server import Server
 
@@ -79,7 +79,7 @@ async def resolve_alert(db: AsyncSession, alert_id: int) -> Alert:
     """Alert'i çözüldü olarak işaretler. Zaten çözülmüşse tekrar güncellemez."""
     alert = await get_alert_or_404(db, alert_id)
     if alert.resolved_at is None:
-        alert.resolved_at = datetime.now(UTC)
+        alert.resolved_at = utc_now_naive()
         await db.flush()
         await sync_server_status_from_alerts(db, alert.server_id)
         logger.info("Alert çözüldü: id=%d type=%s", alert.id, alert.type)
@@ -127,7 +127,7 @@ async def auto_resolve_by_type(
             Alert.type == alert_type,
             Alert.resolved_at.is_(None),
         )
-        .values(resolved_at=datetime.now(UTC))
+        .values(resolved_at=utc_now_naive())
     )
     result = await db.execute(stmt)
     count = result.rowcount
@@ -166,7 +166,7 @@ async def auto_resolve_by_dedupe_key(
             Alert.dedupe_key == dedupe_key,
             Alert.resolved_at.is_(None),
         )
-        .values(resolved_at=datetime.now(UTC))
+        .values(resolved_at=utc_now_naive())
     )
     result = await db.execute(stmt)
     if result.rowcount:
@@ -188,7 +188,7 @@ async def auto_resolve_missing_dedupe_keys(
     )
     if active_keys:
         stmt = stmt.where(Alert.dedupe_key.not_in(active_keys))
-    result = await db.execute(stmt.values(resolved_at=datetime.now(UTC)))
+    result = await db.execute(stmt.values(resolved_at=utc_now_naive()))
     if result.rowcount:
         await sync_server_status_from_alerts(db, server_id)
     return result.rowcount or 0

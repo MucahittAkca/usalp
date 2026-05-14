@@ -1,14 +1,17 @@
 FROM python:3.12-slim AS base
 
 WORKDIR /app
+ENV PIP_DEFAULT_TIMEOUT=120 \
+    PIP_RETRIES=10 \
+    PYTHONPATH=/app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update -o Acquire::Retries=5 \
+    && apt-get install -y --no-install-recommends -o Acquire::Retries=5 \
     gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml .
-COPY app/ ./app/
-RUN pip install --no-cache-dir -e ".[prod]"
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefer-binary -r requirements.txt
 
 COPY . .
 

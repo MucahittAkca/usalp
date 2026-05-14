@@ -71,6 +71,20 @@ export const SERVER_STATUS_LABELS = {
   warning: "Uyarı",
 } as const;
 
+export const SERVER_ENVIRONMENT_LABELS: Record<string, string> = {
+  production: "Prod",
+  staging: "Stage",
+  development: "Dev",
+  test: "Test",
+};
+
+export const SERVER_ENVIRONMENT_COLORS: Record<string, string> = {
+  production: "border-red-200 bg-red-50 text-red-700",
+  staging: "border-amber-200 bg-amber-50 text-amber-700",
+  development: "border-blue-200 bg-blue-50 text-blue-700",
+  test: "border-slate-200 bg-slate-50 text-slate-600",
+};
+
 export const SEVERITY_COLORS = {
   low:      "text-blue-600 bg-blue-50 border-blue-200",
   medium:   "text-yellow-600 bg-yellow-50 border-yellow-200",
@@ -83,6 +97,18 @@ export const SEVERITY_LABELS = {
   medium:   "Orta",
   high:     "Yüksek",
   critical: "Kritik",
+} as const;
+
+export const COMMAND_RISK_COLORS = {
+  low:    "border-green-200 bg-green-50 text-green-700",
+  medium: "border-yellow-200 bg-yellow-50 text-yellow-700",
+  high:   "border-red-200 bg-red-50 text-red-700",
+} as const;
+
+export const COMMAND_RISK_LABELS = {
+  low:    "Düşük Risk",
+  medium: "Orta Risk",
+  high:   "Yüksek Risk",
 } as const;
 
 export const SERVICE_STATUS_COLORS = {

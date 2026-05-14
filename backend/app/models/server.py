@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, String, func
+from sqlalchemy import JSON, DateTime, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -28,6 +28,11 @@ class Server(Base):
     hostname: Mapped[str] = mapped_column(String(255))
     ip_address: Mapped[str] = mapped_column(String(45))
     api_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    environment: Mapped[str] = mapped_column(
+        String(50), default="production", nullable=False, index=True
+    )
+    group_name: Mapped[str] = mapped_column(String(100), default="", nullable=False, index=True)
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     api_key_revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

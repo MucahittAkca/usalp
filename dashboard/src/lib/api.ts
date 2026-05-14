@@ -30,6 +30,10 @@ import type {
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? "/api/v1";
 
+function apiUrl(path: string): string {
+  return `${API_BASE}${path}`;
+}
+
 // ---------------------------------------------------------------------------
 // Yardımcı: genel fetch wrapper
 // ---------------------------------------------------------------------------
@@ -48,7 +52,7 @@ export class ApiError extends Error {
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const token = getToken();
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(apiUrl(path), {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -109,6 +113,9 @@ const auth = {
 interface ServerListParams {
   page?: number;
   per_page?: number;
+  environment?: string;
+  group_name?: string;
+  tag?: string;
 }
 
 interface MetricListParams {
@@ -119,6 +126,7 @@ interface MetricListParams {
 
 interface LogListParams {
   level?: string;
+  q?: string;
   from_dt?: string;
   to_dt?: string;
   page?: number;
@@ -150,6 +158,9 @@ const servers = {
 
   metrics: (id: number, params?: MetricListParams) =>
     apiFetch<MetricListResponse>(`/servers/${id}/metrics${qs({ ...params })}`),
+
+  metricsStreamUrl: (id: number) =>
+    apiUrl(`/servers/${id}/metrics/stream`),
 
   services: (id: number) =>
     apiFetch<ApiResponse<ServiceStatusEntry[]>>(`/servers/${id}/services`),

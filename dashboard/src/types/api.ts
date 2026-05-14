@@ -15,6 +15,8 @@
 
 export type ServerStatus = "online" | "offline" | "warning";
 
+export type ServerEnvironment = "production" | "staging" | "development" | "test" | string;
+
 export type ServiceStatus =
   | "active"
   | "inactive"
@@ -35,6 +37,8 @@ export type AlertType =
 
 export type AiSeverity = "low" | "medium" | "high" | "critical";
 
+export type CommandRisk = "low" | "medium" | "high";
+
 export type AiCategory =
   | "network_error"
   | "disk_issue"
@@ -54,6 +58,9 @@ export interface Server {
   name: string;
   hostname: string;
   ip_address: string;
+  environment: ServerEnvironment;
+  group_name: string;
+  tags: string[];
   status: ServerStatus;
   last_seen: string | null;
   created_at: string;
@@ -64,6 +71,9 @@ export interface ServerCreateRequest {
   name: string;
   hostname: string;
   ip_address: string;
+  environment?: ServerEnvironment;
+  group_name?: string;
+  tags?: string[];
 }
 
 /** backend/app/schemas/server.py → ServerCreatedOut (api_key yalnızca burada) */
@@ -72,6 +82,9 @@ export interface ServerCreated {
   name: string;
   hostname: string;
   ip_address: string;
+  environment: ServerEnvironment;
+  group_name: string;
+  tags: string[];
   status: string;
   api_key: string;
   last_seen: string | null;
@@ -134,6 +147,7 @@ export interface Alert {
 export interface CommandSuggestion {
   command: string;
   description: string;
+  risk_level: CommandRisk;
 }
 
 /** backend/app/schemas/ai_analysis.py → AIAnalysisOut */
@@ -145,6 +159,7 @@ export interface AiAnalysis {
   severity: AiSeverity;
   summary: string;
   causes: string[];
+  evidence_lines: string[];
   commands: CommandSuggestion[];
   confidence: number;
   created_at: string;

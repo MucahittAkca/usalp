@@ -14,13 +14,23 @@ from app.models.server import Server
 from app.models.service_status import ServiceStatus
 
 
-async def _seed_server(db: AsyncSession, name: str = "srv-01") -> Server:
+async def _seed_server(
+    db: AsyncSession,
+    name: str = "srv-01",
+    *,
+    environment: str = "production",
+    group_name: str = "",
+    tags: list[str] | None = None,
+) -> Server:
     """Test veritabanına bir sunucu kaydı ekler."""
     server = Server(
         name=name,
         hostname=f"{name}.local",
         ip_address="10.0.0.1",
         api_key=f"key-{name}",
+        environment=environment,
+        group_name=group_name,
+        tags=tags or [],
         status="active",
     )
     db.add(server)
@@ -147,6 +157,48 @@ async def test_list_servers_pagination(
 
 
 @pytest.mark.asyncio
+async def test_list_servers_filters_environment_group_and_tag(
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict,
+) -> None:
+    """environment + group_name + tag filtreleri birlikte çalışır."""
+    await _seed_server(
+        db_session,
+        "web-01",
+        environment="production",
+        group_name="edge",
+        tags=["nginx", "public"],
+    )
+    await _seed_server(
+        db_session,
+        "worker-01",
+        environment="production",
+        group_name="workers",
+        tags=["queue"],
+    )
+    await _seed_server(
+        db_session,
+        "web-staging",
+        environment="staging",
+        group_name="edge",
+        tags=["nginx"],
+    )
+
+    resp = await client.get(
+        "/api/v1/servers",
+        params={"environment": "production", "group_name": "edge", "tag": "nginx"},
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["meta"]["total"] == 1
+    assert body["data"][0]["name"] == "web-01"
+    assert body["data"][0]["environment"] == "production"
+    assert body["data"][0]["group_name"] == "edge"
+    assert body["data"][0]["tags"] == ["nginx", "public"]
+
+
+@pytest.mark.asyncio
 async def test_list_servers_no_auth(client: AsyncClient) -> None:
     """Token olmadan 401 döner."""
     resp = await client.get("/api/v1/servers")
@@ -170,6 +222,9 @@ async def test_get_server_detail(
     body = resp.json()
     assert body["data"]["name"] == "srv-01"
     assert body["data"]["hostname"] == "srv-01.local"
+    assert body["data"]["environment"] == "production"
+    assert body["data"]["group_name"] == ""
+    assert body["data"]["tags"] == []
     assert "api_key" not in body["data"]
 
 
@@ -178,6 +233,37 @@ async def test_get_server_not_found(client: AsyncClient, auth_headers: dict) -> 
     """Olmayan sunucu için 404 döner."""
     resp = await client.get("/api/v1/servers/9999", headers=auth_headers)
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /servers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_server_with_group_environment_and_tags(
+    client: AsyncClient, auth_headers: dict,
+) -> None:
+    """Sunucu oluştururken grup, ortam ve etiket alanları kaydedilir."""
+    resp = await client.post(
+        "/api/v1/servers",
+        json={
+            "name": "Web 01",
+            "hostname": "web-01.local",
+            "ip_address": "10.0.0.1",
+            "environment": "Production",
+            "group_name": "Edge",
+            "tags": ["Nginx", "Public", "nginx", ""],
+        },
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 201
+    data = resp.json()["data"]
+    assert data["environment"] == "production"
+    assert data["group_name"] == "edge"
+    assert data["tags"] == ["nginx", "public"]
+    assert data["api_key"].startswith("usalp-")
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +507,61 @@ async def test_get_logs_level_filter(
     body = resp.json()
     assert body["meta"]["total"] == 2
     assert all(d["level"] == "WARNING" for d in body["data"])
+
+
+@pytest.mark.asyncio
+async def test_get_logs_search_query_backend_side(
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict,
+) -> None:
+    """q parametresi mesaj, raw_line ve kaynak dosya üzerinde backend-side arar."""
+    server = await _seed_server(db_session)
+    base = datetime.now(UTC)
+    logs = [
+        LogEntry(
+            server_id=server.id,
+            source_file="/var/log/nginx/error.log",
+            level="ERROR",
+            message="upstream connection refused",
+            raw_line="nginx raw line",
+            logged_at=base,
+        ),
+        LogEntry(
+            server_id=server.id,
+            source_file="/var/log/app.log",
+            level="ERROR",
+            message="generic failure",
+            raw_line="trace_id=abc123 hidden detail",
+            logged_at=base - timedelta(seconds=1),
+        ),
+        LogEntry(
+            server_id=server.id,
+            source_file="/var/log/syslog",
+            level="INFO",
+            message="cron completed",
+            raw_line="cron completed",
+            logged_at=base - timedelta(seconds=2),
+        ),
+    ]
+    db_session.add_all(logs)
+    await db_session.commit()
+
+    resp_message = await client.get(
+        f"/api/v1/servers/{server.id}/logs",
+        params={"q": "REFUSED"},
+        headers=auth_headers,
+    )
+    assert resp_message.status_code == 200
+    body_message = resp_message.json()
+    assert body_message["meta"]["total"] == 1
+    assert body_message["data"][0]["message"] == "upstream connection refused"
+
+    resp_raw = await client.get(
+        f"/api/v1/servers/{server.id}/logs",
+        params={"q": "abc123"},
+        headers=auth_headers,
+    )
+    assert resp_raw.json()["meta"]["total"] == 1
+    assert resp_raw.json()["data"][0]["source_file"] == "/var/log/app.log"
 
 
 @pytest.mark.asyncio

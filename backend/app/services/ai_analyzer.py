@@ -34,13 +34,26 @@ kök neden analizi yapıyorsun.
     "category": "network_error|disk_issue|permission_issue|config_error|dependency_failure|resource_exhaustion",
     "summary": "string (Türkçe, 1-2 cümle)",
     "likely_causes": ["string", ...],
-    "suggested_commands": [{"command": "string", "description": "string"}, ...],
+    "evidence_lines": ["string", ...],
+    "suggested_commands": [
+      {
+        "command": "string",
+        "description": "string",
+        "risk_level": "low|medium|high"
+      },
+      ...
+    ],
     "confidence": float (0.0-1.0)
   }
 
 ANALİZ PRENSİPLERİ:
 - "Sorun kesinlikle şudur" deme. "Olası nedenler şunlardır" formatında yaz.
 - Her suggested_command gerçek, çalışır bir Linux komutu olmalı.
+- Her evidence_lines girdisi sana verilen bağlamdaki metrik, servis veya log satırından kısa ve birebir destek almalı; uydurma kanıt ekleme.
+- risk_level:
+    * "low": sadece okuma/inceleme komutları (journalctl, systemctl status, df, free, top, nginx -t)
+    * "medium": servis reload/restart, config doğrulama sonrası sınırlı değişiklik, log rotate gibi etkisi sınırlı operasyonlar
+    * "high": veri silme, paket kaldırma/kurma, firewall değiştirme, disk formatlama, chmod/chown geniş kapsamlı değişiklik, kill -9
 - summary Türkçe yaz, teknik terimler İngilizce kalabilir (nginx, systemd vb.)
 - confidence: kanıt ne kadar güçlüyse o kadar yüksek (0.9+ = çok net sinyal)
 - Kategoriyi log ve metrik sinyallerinden çıkar:
@@ -340,6 +353,7 @@ async def trigger_analysis(
             severity=result.severity,
             summary=result.summary,
             causes=json.dumps(result.likely_causes, ensure_ascii=False),
+            evidence_lines=json.dumps(result.evidence_lines, ensure_ascii=False),
             commands=json.dumps(
                 [c.model_dump() for c in result.suggested_commands],
                 ensure_ascii=False,
