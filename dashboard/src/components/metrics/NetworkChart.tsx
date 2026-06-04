@@ -9,7 +9,7 @@ import {
   Tooltip,
   XAxis,
   YAxis,
-  type TooltipProps,
+  type TooltipContentProps,
 } from "recharts";
 import { formatBytes, formatTime } from "@/lib/utils";
 import type { Metric } from "@/types/api";
@@ -18,14 +18,14 @@ import type { Metric } from "@/types/api";
 // Özel tooltip
 // ---------------------------------------------------------------------------
 
-function NetworkTooltip({ active, payload, label }: TooltipProps<number, string>) {
+function NetworkTooltip({ active, payload, label }: TooltipContentProps) {
   if (!active || !payload?.length) return null;
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-md">
       <p className="mb-1 text-xs text-slate-400">{formatTime(label as string)}</p>
       {payload.map((entry) => (
-        <p key={entry.name} className="text-xs font-medium" style={{ color: entry.color }}>
+        <p key={String(entry.name)} className="text-xs font-medium" style={{ color: entry.color }}>
           {entry.name}: {formatBytes(Number(entry.value))}/s
         </p>
       ))}
@@ -82,7 +82,7 @@ export function NetworkChart({ data, height = 200 }: NetworkChartProps) {
             width={52}
           />
 
-          <Tooltip content={<NetworkTooltip />} />
+          <Tooltip content={NetworkTooltip} />
 
           <Legend
             iconType="circle"

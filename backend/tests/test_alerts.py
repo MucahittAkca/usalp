@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
+from app.core.security import hash_api_key
 from app.models.alert import Alert
 from app.models.server import Server
 from app.schemas.metric import MetricPayload
@@ -74,7 +75,7 @@ async def _seed_server(db: AsyncSession, name: str = "srv-01") -> Server:
         name=name,
         hostname=f"{name}.local",
         ip_address="10.0.0.1",
-        api_key=f"key-{name}",
+        api_key=hash_api_key(f"key-{name}"),
         status="active",
     )
     db.add(server)

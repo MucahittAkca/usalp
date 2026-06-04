@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.config import settings
+from app.core.security import hash_api_key
 from app.models.alert import Alert
 from app.models.server import Server
 from app.services import alert_notifications
@@ -46,7 +47,7 @@ def test_build_alert_notifications_snapshot() -> None:
         name="web-01",
         hostname="web-01.local",
         ip_address="10.0.0.1",
-        api_key="key-web",
+        api_key=hash_api_key("key-web"),
         status="warning",
     )
     alert = Alert(

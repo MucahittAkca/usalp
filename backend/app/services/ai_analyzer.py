@@ -374,7 +374,12 @@ async def trigger_analysis(
         logger.error("ai_parse_error server_id=%d error=%s", server_id, e)
         return None
     except anthropic.APIError as e:
-        logger.error("ai_api_error server_id=%d status=%s", server_id, e.status_code)
+        logger.error(
+            "ai_api_error server_id=%d status=%s error=%s",
+            server_id,
+            e.status_code,
+            e,
+        )
         return None
     except Exception:
         logger.exception("ai_unexpected_error server_id=%d", server_id)

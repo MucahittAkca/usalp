@@ -6,6 +6,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.metric import MetricOut
+
 MAX_TAGS = 20
 MAX_TAG_LENGTH = 40
 
@@ -91,6 +93,9 @@ class ServerOut(BaseModel):
     status: str
     last_seen: datetime | None
     created_at: datetime
+    latest_metric: MetricOut | None = None
+    active_alert_count: int = 0
+    critical_alert_count: int = 0
 
 
 class ServerApiKeyOut(BaseModel):

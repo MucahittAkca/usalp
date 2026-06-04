@@ -13,9 +13,9 @@ export function useServerList(filters?: ServerListFilters) {
     ["server-list", filters?.environment ?? "", filters?.group_name ?? "", filters?.tag ?? ""],
     () => api.servers.list(filters),
     {
-      refreshInterval: 30_000,
-      revalidateOnFocus: true,
-      dedupingInterval: 5_000,
+      refreshInterval: 60_000,
+      revalidateOnFocus: false,
+      dedupingInterval: 10_000,
     },
   );
 

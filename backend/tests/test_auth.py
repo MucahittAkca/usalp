@@ -2,8 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 from httpx import AsyncClient
+
+from app.api.auth import _attempts
+from app.config import settings
+
+
+@pytest.fixture(autouse=True)
+def clear_login_attempts() -> Iterator[None]:
+    """Login rate-limit state testler arasında sızmasın."""
+    _attempts.clear()
+    yield
+    _attempts.clear()
 
 
 @pytest.mark.asyncio
@@ -44,6 +57,31 @@ async def test_login_missing_fields(client: AsyncClient) -> None:
     """Eksik alanlar ile 422 döner."""
     resp = await client.post("/api/v1/auth/token", json={"username": "admin"})
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_login_rate_limit_after_repeated_failures(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ardışık başarısız login denemeleri 429 ile kısa süreli kilitlenir."""
+    monkeypatch.setattr(settings, "LOGIN_RATE_LIMIT_ATTEMPTS", 2)
+    monkeypatch.setattr(settings, "LOGIN_RATE_LIMIT_WINDOW_SECONDS", 60)
+    monkeypatch.setattr(settings, "LOGIN_RATE_LIMIT_LOCK_SECONDS", 30)
+
+    for _ in range(2):
+        resp = await client.post(
+            "/api/v1/auth/token",
+            json={"username": "admin", "password": "wrong"},
+        )
+        assert resp.status_code == 401
+
+    locked = await client.post(
+        "/api/v1/auth/token",
+        json={"username": "admin", "password": "admin"},
+    )
+    assert locked.status_code == 429
+    assert "Retry-After" in locked.headers
 
 
 @pytest.mark.asyncio

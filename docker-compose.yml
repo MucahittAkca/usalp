@@ -26,13 +26,15 @@ services:
       DATABASE_URL: postgresql+asyncpg://usalp:${POSTGRES_PASSWORD}@postgres:5432/usalp
       LLM_API_KEY: ${LLM_API_KEY}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://openrouter.ai/api}
-      LLM_MODEL: ${LLM_MODEL:-anthropic/claude-sonnet-4-20250514}
-      AGENT_API_KEY: ${AGENT_API_KEY}
+      LLM_MODEL: ${LLM_MODEL:-anthropic/claude-sonnet-4}
       SECRET_KEY: ${SECRET_KEY}
+      USALP_PUBLIC_URL: ${USALP_PUBLIC_URL:-https://localhost}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://localhost}
+      MAX_REQUEST_BODY_BYTES: ${MAX_REQUEST_BODY_BYTES:-1048576}
       DASHBOARD_USERNAME: ${DASHBOARD_USERNAME:-admin}
-      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-admin}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
       DASHBOARD_PASSWORD_HASH: ${DASHBOARD_PASSWORD_HASH:-}
-      ENVIRONMENT: ${ENVIRONMENT:-development}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
       DEMO_MODE: ${DEMO_MODE:-false}
       DEMO_SEED_RESET: ${DEMO_SEED_RESET:-true}
       ALERT_NOTIFICATIONS_ENABLED: ${ALERT_NOTIFICATIONS_ENABLED:-true}
@@ -54,7 +56,6 @@ services:
     networks:
       - internal
     volumes:
-      - ./backend:/app   # Development: hot reload
       - ./agent:/agent:ro
 
   dashboard:
@@ -63,21 +64,26 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      NEXT_PUBLIC_API_URL: /api/v1   # Nginx üzerinden proxy
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/v1}
     depends_on:
       - backend
     networks:
       - internal
 
-  nginx:
-    image: nginx:1.25-alpine
+  caddy:
+    image: caddy:2-alpine
     restart: unless-stopped
+    environment:
+      USALP_SITE_ADDRESS: ${USALP_SITE_ADDRESS:-:80}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@example.invalid}
+      MAX_REQUEST_BODY_SIZE: ${MAX_REQUEST_BODY_SIZE:-10MB}
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/certs:/etc/nginx/certs:ro   # TLS sertifikaları
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
     depends_on:
       - backend
       - dashboard
@@ -87,6 +93,8 @@ services:
 
 volumes:
   postgres_data:
+  caddy_data:
+  caddy_config:
 
 networks:
   internal:

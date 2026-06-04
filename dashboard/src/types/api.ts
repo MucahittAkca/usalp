@@ -64,6 +64,9 @@ export interface Server {
   status: ServerStatus;
   last_seen: string | null;
   created_at: string;
+  latest_metric: Metric | null;
+  active_alert_count: number;
+  critical_alert_count: number;
 }
 
 /** POST /servers request body */

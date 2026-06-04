@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security import hash_api_key
 from app.models.alert import Alert
 from app.models.log_entry import LogEntry
 from app.models.metric import Metric
@@ -92,7 +93,7 @@ async def _seed_server(db: AsyncSession) -> Server:
         name="web-01",
         hostname="web-01.local",
         ip_address="10.0.0.1",
-        api_key="test-api-key-123",
+        api_key=hash_api_key("test-api-key-123"),
         status="inactive",
     )
     db.add(server)
@@ -246,6 +247,24 @@ async def test_post_metrics_extra_field_rejected(
         json=payload,
         headers={"Authorization": "Bearer test-api-key-123"},
     )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_post_metrics_rejects_oversized_log_batch(
+    client: AsyncClient, db_session: AsyncSession,
+) -> None:
+    """Log batch limiti schema seviyesinde 422 ile korunur."""
+    await _seed_server(db_session)
+    payload = _make_payload()
+    payload["log_entries"] = payload["log_entries"] * 201
+
+    resp = await client.post(
+        "/api/v1/metrics",
+        json=payload,
+        headers={"Authorization": "Bearer test-api-key-123"},
+    )
+
     assert resp.status_code == 422
 
 

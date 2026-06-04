@@ -11,6 +11,7 @@ from httpx import AsyncClient
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security import hash_api_key
 from app.models.ai_analysis import AIAnalysis
 from app.models.log_entry import LogEntry
 from app.models.metric import Metric
@@ -65,7 +66,7 @@ VALID_AI_OUTPUT: dict = {
 async def _seed_server(db: AsyncSession, name: str = "ai-srv") -> Server:
     server = Server(
         name=name, hostname=f"{name}.local", ip_address="10.0.0.1",
-        api_key=f"key-{name}", status="active",
+        api_key=hash_api_key(f"key-{name}"), status="active",
     )
     db.add(server)
     await db.commit()

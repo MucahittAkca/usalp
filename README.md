@@ -7,20 +7,28 @@ AI destekli Linux sunucu izleme ve log analiz platformu.
 - `backend`: FastAPI, PostgreSQL, Alembic, JWT auth, alert motoru ve AI analiz.
 - `agent`: İzlenen Linux sunucuda çalışan metrik/log/servis toplayıcı.
 - `dashboard`: Next.js dashboard.
-- `nginx`: Dashboard ve API reverse proxy.
+- `caddy`: Dashboard ve API reverse proxy, production'da otomatik HTTPS.
 
-## Hızlı Kurulum
+## Production Kurulum
 
-1. `.env.example` dosyasını `.env` olarak kopyalayın.
-2. `POSTGRES_PASSWORD`, `SECRET_KEY`, `DASHBOARD_PASSWORD` veya
-   `DASHBOARD_PASSWORD_HASH` değerlerini değiştirin.
-3. Servisleri başlatın:
+Merkezi kontrol düzlemi için bir Linux sunucu, gerçek DNS kaydı ve 80/443
+portlarının açık olması gerekir.
 
 ```bash
-docker compose up --build
+git clone <repo-url> /opt/usalp
+cd /opt/usalp
+./scripts/setup-prod.sh
 ```
 
-Geliştirme modunda hot reload için:
+Script `.env` üretir, dashboard şifresini hash'ler, production secret'larını
+oluşturur, DNS/port/outbound HTTPS kontrollerini yapar ve `docker compose up -d --build`
+çalıştırır. Dashboard ve API aynı origin üzerinden servis edilir:
+
+- Dashboard: `https://domain`
+- Health: `https://domain/health`
+- API: `https://domain/api/v1`
+
+Geliştirme modunda hot reload ve localhost HTTP için:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
@@ -32,11 +40,18 @@ API dokümantasyonu development ortamında: `http://localhost/api/docs`
 
 ## Demo Modu
 
-Örnek sunucular, metrik geçmişi, loglar, alert'ler ve AI analizleriyle çalışan
-demo ortamını tek komutla başlatmak için:
+Örnek sunucular, metrik geçmişi, loglar ve alert'lerle çalışan demo ortamını
+tek komutla başlatmak için:
 
 ```bash
 ./demo.sh
+```
+
+LLM analizi opsiyoneldir. Gerçek AI analizi denemek için `.env` içine
+OpenRouter anahtarını ekleyin:
+
+```bash
+LLM_API_KEY=sk-or-v1-...
 ```
 
 Dashboard: `http://localhost`
@@ -47,7 +62,17 @@ Demo kullanıcı bilgileri:
 - Şifre: `admin`
 
 Demo modu `DEMO_MODE=true` ile backend startup sırasında seed verisini üretir.
-Varsayılan olarak yalnızca `usalp-demo-` API key prefix'li demo kayıtları
+Dashboard'un AI ekranı boş kalmasın diye demo verisiyle uyumlu örnek AI analiz
+kayıtları da seed edilir; bu kayıtların özetinde `[DEMO]` etiketi bulunur.
+`LLM_API_KEY` tanımlıysa dashboard'daki "Yeni Analiz Başlat" akışı gerçek LLM
+çağrısı yapar ve yeni analizleri OpenRouter yanıtından üretir. Key tanımlı
+değilse uygulama çalışmaya devam eder. LLM hataları backend loglarında görünür:
+
+```bash
+docker compose -p usalp_demo logs -f backend
+```
+
+Varsayılan olarak yalnızca `.usalp.demo` hostname suffix'li demo kayıtları
 yenilenir; kullanıcı tarafından oluşturulan kayıtlar korunur. Demo verisini
 her başlangıçta yenilememek için `DEMO_SEED_RESET=false` verilebilir.
 Demo script'i varsayılan olarak `usalp_demo` Compose project adıyla ayrı volume
@@ -62,10 +87,28 @@ docker compose -p usalp_demo down -v
 Dashboard'da yeni sunucu ekleyince tek kullanımlık API anahtarı ve kurulum komutu
 üretilir. İzlenecek Linux sunucuda bu komutu root yetkisiyle çalıştırın.
 
+Production komutu şu formdadır:
+
+```bash
+curl -fsSL https://domain/install.sh | sudo bash -s -- --api-key <key> --backend-url https://domain
+```
+
 Backend ayrıca kurulum için iki public dosya servis eder:
 
 - `/install.sh`
 - `/agent.tar.gz`
+
+Installer plain HTTP backend URL'lerini reddeder; yalnızca lokal geliştirme için
+`--allow-insecure` verilebilir. Agent runtime dosyaları `/opt/usalp-agent`,
+config dosyası `/etc/usalp-agent/agent.yaml`, disk kuyruğu
+`/var/lib/usalp-agent/queue` altında tutulur.
+
+Yardımcı komutlar:
+
+```bash
+sudo bash /opt/usalp-agent/install.sh --status
+sudo bash /opt/usalp-agent/install.sh --uninstall
+```
 
 Agent varsayılan olarak 30 saniyede bir CPU, RAM, network, servis ve yeni logları;
 60 saniyede bir disk ve process verilerini gönderir.
@@ -132,5 +175,13 @@ npm run build
 ## Güvenlik Notları
 
 Production ortamında `SECRET_KEY` ve dashboard şifresi/hash'i güvenli değerlerle
-tanımlanmalıdır. Agent API anahtarları dashboard üzerinden yenilenebilir veya
-iptal edilebilir.
+tanımlanmalıdır. Production backend `DASHBOARD_PASSWORD_HASH` olmadan açılmaz.
+Agent API anahtarları veritabanında hash'lenmiş saklanır; ham anahtar yalnızca
+sunucu oluşturma veya anahtar yenileme yanıtında gösterilir.
+
+Reverse proxy request body limitleri, HSTS ve temel security header'ları uygular.
+Backend ayrıca metric/log ingestion şemalarında liste ve metin uzunluğu limitleri
+tanımlar.
+
+CI gate'leri backend testleri, agent testleri, dashboard lint/build,
+`npm audit --omit=dev`, Python `pip-audit`, Docker build ve shellcheck içerir.

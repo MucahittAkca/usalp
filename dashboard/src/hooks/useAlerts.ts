@@ -2,12 +2,16 @@ import useSWR from "swr";
 import { api } from "@/lib/api";
 import type { Alert } from "@/types/api";
 
-/** Tüm alertleri 15 sn polling ile döndürür. Sidebar badge ve alarm merkezi için. */
+/** Alertleri düşük frekanslı polling ile döndürür. */
 export function useAlerts(serverId?: number) {
   const { data, error, isLoading, mutate } = useSWR(
     serverId ? `alerts-server-${serverId}` : "alerts-all",
     () => api.alerts.list({ server_id: serverId, resolved: false }),
-    { refreshInterval: 15_000 },
+    {
+      refreshInterval: 60_000,
+      dedupingInterval: 10_000,
+      revalidateOnFocus: false,
+    },
   );
 
   const alerts: Alert[] = data?.data ?? [];

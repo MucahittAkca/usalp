@@ -14,6 +14,7 @@ export function usePolling<T>(
   const [error, setError] = useState<Error | null>(null);
   const [loading, setLoading] = useState(true);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const initialTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const poll = useCallback(async () => {
     try {
@@ -28,9 +29,12 @@ export function usePolling<T>(
   }, [fetcher]);
 
   useEffect(() => {
-    poll();
+    initialTimerRef.current = setTimeout(() => {
+      void poll();
+    }, 0);
     timerRef.current = setInterval(poll, intervalMs);
     return () => {
+      if (initialTimerRef.current) clearTimeout(initialTimerRef.current);
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [poll, intervalMs]);

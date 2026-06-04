@@ -9,10 +9,8 @@ import {
   metricBarColor,
   metricColor,
 } from "@/lib/utils";
-import { useLatestMetric } from "@/hooks/useServerMetrics";
-import { useAlerts } from "@/hooks/useAlerts";
 import { ServerStatusBadge } from "@/components/servers/ServerStatusBadge";
-import type { Server as ServerType } from "@/types/api";
+import type { Metric, Server as ServerType } from "@/types/api";
 
 interface ServerCardProps {
   server: ServerType;
@@ -58,26 +56,10 @@ function MetricRow({ label, value, warn = 80, crit = 90 }: MetricRowProps) {
 // Metrik bölümü — yükleniyor / hata / veriler
 // ---------------------------------------------------------------------------
 
-function MetricsSection({ serverId, offline }: { serverId: number; offline: boolean }) {
-  const { metric, isLoading } = useLatestMetric(serverId);
-
+function MetricsSection({ metric, offline }: { metric: Metric | null; offline: boolean }) {
   if (offline) {
     return (
       <p className="text-xs text-slate-400 italic">Sunucu çevrimdışı — metrik alınamıyor</p>
-    );
-  }
-
-  if (isLoading) {
-    return (
-      <div className="space-y-2">
-        {["CPU", "RAM", "Disk"].map((l) => (
-          <div key={l} className="flex items-center gap-2">
-            <span className="w-10 text-xs text-slate-400">{l}</span>
-            <div className="h-1.5 flex-1 animate-pulse rounded-full bg-slate-200" />
-            <span className="w-10" />
-          </div>
-        ))}
-      </div>
     );
   }
 
@@ -100,7 +82,8 @@ function MetricsSection({ serverId, offline }: { serverId: number; offline: bool
 
 export function ServerCard({ server }: ServerCardProps) {
   const offline = server.status === "offline";
-  const { activeCount, criticalCount } = useAlerts(server.id);
+  const activeCount = server.active_alert_count;
+  const criticalCount = server.critical_alert_count;
   const envLabel = SERVER_ENVIRONMENT_LABELS[server.environment] ?? server.environment;
   const envClass =
     SERVER_ENVIRONMENT_COLORS[server.environment] ??
@@ -179,7 +162,7 @@ export function ServerCard({ server }: ServerCardProps) {
       </div>
 
       {/* Metrikler */}
-      <MetricsSection serverId={server.id} offline={offline} />
+      <MetricsSection metric={server.latest_metric} offline={offline} />
 
       {/* Alt satır: alarm sayısı + ok */}
       <div className="flex items-center justify-between pt-1">

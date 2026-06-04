@@ -8,6 +8,8 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security import hash_api_key, is_hashed_api_key
+from app.models.alert import Alert
 from app.models.log_entry import LogEntry
 from app.models.metric import Metric
 from app.models.server import Server
@@ -27,7 +29,7 @@ async def _seed_server(
         name=name,
         hostname=f"{name}.local",
         ip_address="10.0.0.1",
-        api_key=f"key-{name}",
+        api_key=hash_api_key(f"key-{name}"),
         environment=environment,
         group_name=group_name,
         tags=tags or [],
@@ -133,6 +135,44 @@ async def test_list_servers_with_data(
     assert len(body["data"]) == 2
     names = {s["name"] for s in body["data"]}
     assert names == {"web-01", "db-01"}
+
+
+@pytest.mark.asyncio
+async def test_list_servers_includes_card_summaries(
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict,
+) -> None:
+    """Liste yanıtı kart başına metrik/alarm N+1 çağrılarını gerektirmez."""
+    server = await _seed_server(db_session, "web-01")
+    await _seed_metrics(db_session, server.id, count=2)
+    db_session.add_all(
+        [
+            Alert(
+                server_id=server.id,
+                type="cpu_threshold",
+                dedupe_key="cpu_threshold",
+                severity="critical",
+                message="CPU kritik",
+            ),
+            Alert(
+                server_id=server.id,
+                type="disk_threshold",
+                dedupe_key="disk_threshold",
+                severity="warning",
+                message="Disk warning",
+                resolved_at=datetime.now(UTC),
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    resp = await client.get("/api/v1/servers", headers=auth_headers)
+
+    assert resp.status_code == 200
+    data = resp.json()["data"][0]
+    assert data["latest_metric"]["server_id"] == server.id
+    assert data["latest_metric"]["cpu_percent"] == 20.0
+    assert data["active_alert_count"] == 1
+    assert data["critical_alert_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -242,7 +282,7 @@ async def test_get_server_not_found(client: AsyncClient, auth_headers: dict) -> 
 
 @pytest.mark.asyncio
 async def test_create_server_with_group_environment_and_tags(
-    client: AsyncClient, auth_headers: dict,
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict,
 ) -> None:
     """Sunucu oluştururken grup, ortam ve etiket alanları kaydedilir."""
     resp = await client.post(
@@ -264,6 +304,11 @@ async def test_create_server_with_group_environment_and_tags(
     assert data["group_name"] == "edge"
     assert data["tags"] == ["nginx", "public"]
     assert data["api_key"].startswith("usalp-")
+
+    db_server = await db_session.get(Server, data["id"])
+    assert db_server is not None
+    assert is_hashed_api_key(db_server.api_key)
+    assert db_server.api_key != data["api_key"]
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +366,43 @@ async def test_get_metrics_custom_time_range(
     body = resp.json()
     assert body["meta"]["total"] == 4
     assert len(body["data"]) == 4
+
+
+@pytest.mark.asyncio
+async def test_get_metrics_demo_range_is_anchored_to_latest_demo_metric(
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict,
+) -> None:
+    """Demo grafik aralıkları duvar saatinden etkilenip boşalmaz."""
+    server = Server(
+        name="demo-web",
+        hostname="demo-web.usalp.demo",
+        ip_address="10.20.0.10",
+        api_key=hash_api_key("demo-web-key"),
+        environment="production",
+        group_name="edge",
+        tags=["demo"],
+        status="warning",
+    )
+    db_session.add(server)
+    await db_session.commit()
+    await db_session.refresh(server)
+    base = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    await _seed_metrics(db_session, server.id, count=3, base_time=base)
+
+    resp = await client.get(
+        f"/api/v1/servers/{server.id}/metrics",
+        params={
+            "from_dt": "2030-01-01T12:00:00Z",
+            "to_dt": "2030-01-01T13:00:00Z",
+        },
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["meta"]["total"] == 3
+    assert len(body["data"]) == 3
+    assert body["data"][0]["recorded_at"].startswith("2026-01-01T12:00:00")
 
 
 @pytest.mark.asyncio

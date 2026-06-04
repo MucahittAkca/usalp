@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, hash_api_key
 from app.database import get_db
 from app.models.server import Server
 
@@ -29,9 +29,10 @@ async def verify_agent_api_key(
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key format")
 
+    api_key_hash = hash_api_key(token)
     server = await db.scalar(
         select(Server).where(
-            Server.api_key == token,
+            Server.api_key == api_key_hash,
             Server.api_key_revoked_at.is_(None),
         )
     )

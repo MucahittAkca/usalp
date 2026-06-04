@@ -3,6 +3,12 @@
 services:
   backend:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      ENVIRONMENT: development
+      USALP_PUBLIC_URL: http://localhost
+      CORS_ORIGINS: http://localhost,http://localhost:3000
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-admin}
+      DASHBOARD_PASSWORD_HASH: ${DASHBOARD_PASSWORD_HASH:-}
     volumes:
       - ./backend:/app
 
@@ -13,6 +19,11 @@ services:
       - /app/node_modules      # node_modules host'tan izole
     environment:
       NODE_ENV: development
+      NEXT_PUBLIC_API_URL: /api/v1
+
+  caddy:
+    environment:
+      USALP_SITE_ADDRESS: :80
 
   postgres:
     ports:

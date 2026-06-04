@@ -10,14 +10,16 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
 from app.api.deps import get_current_user
 from app.core.exceptions import NotFoundError
+from app.core.security import hash_api_key
 from app.core.time import as_naive_utc, utc_now_naive
 from app.database import async_session, get_db
+from app.models.alert import Alert
 from app.models.log_entry import LogEntry
 from app.models.metric import Metric
 from app.models.server import Server
@@ -33,9 +35,12 @@ from app.schemas.server import (
     normalize_tags,
 )
 from app.services import metric_stream, server_status
+from app.services.demo_seed import DEMO_HOST_SUFFIX
 
 router = APIRouter(tags=["servers"])
 STREAM_KEEPALIVE_SECONDS = 15
+AlertCountMap = dict[int, tuple[int, int]]
+LatestMetricMap = dict[int, Metric]
 
 
 def _generate_api_key() -> str:
@@ -57,6 +62,94 @@ async def _get_server_or_404(db: AsyncSession, server_id: int) -> Server:
     if not server:
         raise NotFoundError("Server", server_id)
     return server
+
+
+async def _load_server_summaries(
+    db: AsyncSession,
+    server_ids: list[int],
+) -> tuple[LatestMetricMap, AlertCountMap]:
+    """Liste kartları için N+1 çağrı gerektirmeyen metrik/alarm özetleri."""
+    if not server_ids:
+        return {}, {}
+
+    latest_metric_rows = (
+        select(
+            Metric.id.label("metric_id"),
+            func.row_number()
+            .over(
+                partition_by=Metric.server_id,
+                order_by=[Metric.recorded_at.desc(), Metric.id.desc()],
+            )
+            .label("row_number"),
+        )
+        .where(Metric.server_id.in_(server_ids))
+        .subquery()
+    )
+    metric_result = await db.execute(
+        select(Metric)
+        .options(defer(Metric.raw_json))
+        .join(latest_metric_rows, Metric.id == latest_metric_rows.c.metric_id)
+        .where(latest_metric_rows.c.row_number == 1)
+    )
+    latest_metrics = {
+        metric.server_id: metric
+        for metric in metric_result.scalars().all()
+    }
+
+    alert_result = await db.execute(
+        select(
+            Alert.server_id,
+            func.count(Alert.id).label("active_count"),
+            func.sum(
+                case((Alert.severity == "critical", 1), else_=0),
+            ).label("critical_count"),
+        )
+        .where(
+            Alert.server_id.in_(server_ids),
+            Alert.resolved_at.is_(None),
+        )
+        .group_by(Alert.server_id)
+    )
+    alert_counts: AlertCountMap = {
+        server_id: (int(active_count or 0), int(critical_count or 0))
+        for server_id, active_count, critical_count in alert_result.all()
+    }
+
+    return latest_metrics, alert_counts
+
+
+def _server_out(
+    server: Server,
+    latest_metrics: LatestMetricMap,
+    alert_counts: AlertCountMap,
+) -> dict:
+    """Server modelini kart özetleriyle birlikte API sözleşmesine çevirir."""
+    active_count, critical_count = alert_counts.get(server.id, (0, 0))
+    latest_metric = latest_metrics.get(server.id)
+    return ServerOut.model_validate(server).model_copy(
+        update={
+            "latest_metric": (
+                MetricOut.model_validate(latest_metric)
+                if latest_metric is not None
+                else None
+            ),
+            "active_alert_count": active_count,
+            "critical_alert_count": critical_count,
+        }
+    ).model_dump()
+
+
+def _is_demo_server(server: Server) -> bool:
+    """Demo seed kayıtlarını hostname suffix'iyle tanır."""
+    return server.hostname.endswith(DEMO_HOST_SUFFIX)
+
+
+async def _latest_metric_recorded_at(db: AsyncSession, server_id: int) -> datetime | None:
+    """Bir sunucunun en güncel metrik zamanını döndürür."""
+    latest = await db.scalar(
+        select(func.max(Metric.recorded_at)).where(Metric.server_id == server_id)
+    )
+    return as_naive_utc(latest) if latest is not None else None
 
 
 def _sse_event(event: str, data: dict[str, object]) -> str:
@@ -108,7 +201,7 @@ async def create_server(
         environment=body.environment,
         group_name=body.group_name,
         tags=body.tags,
-        api_key=api_key,
+        api_key=hash_api_key(api_key),
         status="offline",
     )
     db.add(server)
@@ -116,7 +209,19 @@ async def create_server(
     await db.refresh(server)
 
     return {
-        "data": ServerCreatedOut.model_validate(server).model_dump(),
+        "data": ServerCreatedOut(
+            id=server.id,
+            name=server.name,
+            hostname=server.hostname,
+            ip_address=server.ip_address,
+            environment=server.environment,
+            group_name=server.group_name,
+            tags=server.tags,
+            status=server.status,
+            api_key=api_key,
+            last_seen=server.last_seen,
+            created_at=server.created_at,
+        ).model_dump(),
         "meta": {"timestamp": datetime.now(UTC).isoformat()},
     }
 
@@ -167,8 +272,11 @@ async def list_servers(
         result = await db.execute(stmt)
         servers = result.scalars().all()
 
+    server_ids = [server.id for server in servers]
+    latest_metrics, alert_counts = await _load_server_summaries(db, server_ids)
+
     return {
-        "data": [ServerOut.model_validate(s).model_dump() for s in servers],
+        "data": [_server_out(s, latest_metrics, alert_counts) for s in servers],
         "meta": {"total": total or 0, "page": page, "per_page": per_page},
     }
 
@@ -185,8 +293,9 @@ async def get_server(
     """Belirli bir sunucunun detayını döndürür."""
     await server_status.mark_stale_servers_offline(db)
     server = await _get_server_or_404(db, server_id)
+    latest_metrics, alert_counts = await _load_server_summaries(db, [server.id])
     return {
-        "data": ServerOut.model_validate(server).model_dump(),
+        "data": _server_out(server, latest_metrics, alert_counts),
         "meta": {"timestamp": datetime.now(UTC).isoformat()},
     }
 
@@ -202,14 +311,15 @@ async def rotate_server_key(
 ) -> dict:
     """Sunucunun agent API anahtarını yeniler; yeni anahtar yalnızca bu yanıtta görünür."""
     server = await _get_server_or_404(db, server_id)
-    server.api_key = _generate_api_key()
+    api_key = _generate_api_key()
+    server.api_key = hash_api_key(api_key)
     server.api_key_revoked_at = None
     server.status = "offline"
     server.last_seen = None
     await db.flush()
 
     return {
-        "data": ServerApiKeyOut(id=server.id, api_key=server.api_key).model_dump(),
+        "data": ServerApiKeyOut(id=server.id, api_key=api_key).model_dump(),
         "meta": {"timestamp": datetime.now(UTC).isoformat()},
     }
 
@@ -273,11 +383,17 @@ async def get_server_metrics(
     from_dt/to_dt verilmezse son 1 saati döndürür.
     raw_json performans için yüklenmez; detay için /metrics/{id} kullanılmalı.
     """
-    await _get_server_or_404(db, server_id)
+    server = await _get_server_or_404(db, server_id)
 
     now = utc_now_naive()
     from_dt = now - timedelta(hours=1) if from_dt is None else as_naive_utc(from_dt)
     to_dt = now if to_dt is None else as_naive_utc(to_dt)
+    if _is_demo_server(server):
+        latest_recorded_at = await _latest_metric_recorded_at(db, server_id)
+        if latest_recorded_at is not None:
+            window = to_dt - from_dt
+            to_dt = latest_recorded_at
+            from_dt = to_dt - window
 
     where_clauses = [
         Metric.server_id == server_id,

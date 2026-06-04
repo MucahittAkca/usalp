@@ -8,7 +8,7 @@ import {
   Tooltip,
   XAxis,
   YAxis,
-  type TooltipProps,
+  type TooltipContentProps,
 } from "recharts";
 import { formatTime } from "@/lib/utils";
 import type { Metric } from "@/types/api";
@@ -50,14 +50,14 @@ const CHART_CONFIG: Record<
 // Özel tooltip
 // ---------------------------------------------------------------------------
 
-function CustomTooltip({ active, payload, label }: TooltipProps<number, string>) {
+function CustomTooltip({ active, payload, label }: TooltipContentProps) {
   if (!active || !payload?.length) return null;
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-md">
       <p className="mb-1 text-xs text-slate-400">{formatTime(label as string)}</p>
       {payload.map((entry) => (
-        <p key={entry.name} className="text-xs font-medium" style={{ color: entry.color }}>
+        <p key={String(entry.name)} className="text-xs font-medium" style={{ color: entry.color }}>
           {entry.name}: %{Number(entry.value).toFixed(1)}
         </p>
       ))}
@@ -118,7 +118,7 @@ export function MetricChart({ data, metricKey, height = 200 }: MetricChartProps)
             width={38}
           />
 
-          <Tooltip content={<CustomTooltip />} />
+          <Tooltip content={CustomTooltip} />
 
           {/* Uyarı eşiği referans çizgisi */}
           <Area

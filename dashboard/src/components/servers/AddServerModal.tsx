@@ -86,8 +86,12 @@ export function AddServerModal({ onCreated }: Props) {
 
   const backendOrigin =
     typeof window !== "undefined" ? window.location.origin : "http://localhost";
+  const allowInsecureFlag =
+    typeof window !== "undefined" && window.location.protocol !== "https:"
+      ? " --allow-insecure"
+      : "";
   const installCommand = created
-    ? `curl -fsSL ${backendOrigin}/install.sh | bash -s -- --api-key ${created.api_key} --backend-url ${backendOrigin}`
+    ? `curl -fsSL ${backendOrigin}/install.sh | sudo bash -s -- --api-key ${created.api_key} --backend-url ${backendOrigin}${allowInsecureFlag}`
     : "";
 
   function copyInstall() {

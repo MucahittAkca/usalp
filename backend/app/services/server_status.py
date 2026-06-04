@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.server import Server
+from app.services.demo_seed import DEMO_HOST_SUFFIX
 
 
 async def mark_stale_servers_offline(db: AsyncSession) -> int:
@@ -20,6 +21,7 @@ async def mark_stale_servers_offline(db: AsyncSession) -> int:
             Server.status != "offline",
             Server.last_seen.isnot(None),
             Server.last_seen < cutoff,
+            ~Server.hostname.like(f"%{DEMO_HOST_SUFFIX}"),
         )
         .values(status="offline")
     )

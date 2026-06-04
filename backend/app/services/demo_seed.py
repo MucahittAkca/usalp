@@ -8,9 +8,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security import hash_api_key
 from app.models.ai_analysis import AIAnalysis
 from app.models.alert import Alert
 from app.models.log_entry import LogEntry
@@ -19,6 +20,40 @@ from app.models.server import Server
 from app.models.service_status import ServiceStatus
 
 DEMO_API_KEY_PREFIX = "usalp-demo-"
+DEMO_HOST_SUFFIX = ".usalp.demo"
+
+
+def _initial_demo_reference() -> datetime:
+    """İlk demo seed için stabil ve grafiklerde güncel görünen zaman ankrajı."""
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
+    rounded_minute = (now.minute // 15) * 15
+    return now.replace(minute=rounded_minute)
+
+
+def _latest_metric_reference_offset() -> timedelta:
+    """En güncel demo metriğinden seed ankrajına geri dönecek offset'i hesaplar."""
+    deltas = [
+        spec.last_seen_delta
+        for spec in _demo_specs()
+        if spec.last_seen_delta is not None
+    ]
+    return min(deltas) if deltas else timedelta()
+
+
+async def _demo_reference_from_existing_data(db: AsyncSession) -> datetime | None:
+    """Restart/reset sırasında mevcut demo zaman ankrajını korur."""
+    latest_metric_at = await db.scalar(
+        select(func.max(Metric.recorded_at))
+        .join(Server, Metric.server_id == Server.id)
+        .where(Server.hostname.like(f"%{DEMO_HOST_SUFFIX}"))
+    )
+    if latest_metric_at is None:
+        return None
+    if latest_metric_at.tzinfo is None:
+        latest_metric_at = latest_metric_at.replace(tzinfo=UTC)
+    else:
+        latest_metric_at = latest_metric_at.astimezone(UTC)
+    return latest_metric_at + _latest_metric_reference_offset()
 
 
 @dataclass(frozen=True)
@@ -35,7 +70,7 @@ class DemoAlertSpec:
 
 @dataclass(frozen=True)
 class DemoAnalysisSpec:
-    """Demo AI analiz tanımı."""
+    """LLM key olmadan demo ekranını dolduran örnek analiz tanımı."""
 
     alert_dedupe_key: str
     category: str
@@ -122,38 +157,41 @@ def _demo_specs() -> tuple[DemoServerSpec, ...]:
             ),
             analyses=(
                 DemoAnalysisSpec(
-                    alert_dedupe_key="cpu_threshold",
-                    category="resource_exhaustion",
+                    alert_dedupe_key="service_failed:nginx",
+                    category="dependency_failure",
                     severity="critical",
-                    summary="prod-web-01 üzerinde CPU doyumu ve nginx upstream hataları aynı zaman aralığında yoğunlaşıyor.",
+                    summary=(
+                        "[DEMO] prod-web-01 üzerinde nginx servisi failed durumda ve "
+                        "upstream bağlantı hataları aynı zaman aralığında yoğunlaşıyor."
+                    ),
                     causes=(
-                        "Trafik artışı worker process'lerini CPU sınırına taşımış olabilir.",
-                        "Nginx upstream bağlantı hataları retry yükünü artırıyor olabilir.",
+                        "Nginx'in bağlanmaya çalıştığı checkout-api socket'i veya upstream servisi kapalı olabilir.",
+                        "Yük artışı worker bağlantı limitlerine çarparak nginx hatalarını artırmış olabilir.",
                     ),
                     evidence_lines=(
-                        "[METRIC] CPU %94.2, load_avg_1 3.81",
-                        "[ERROR] /var/log/nginx/error.log: upstream connect() failed (111: Connection refused)",
                         "[SERVICE] nginx failed",
+                        "[ERROR] /var/log/nginx/error.log: upstream connect() failed (111: Connection refused)",
+                        "[WARNING] /var/log/nginx/error.log: worker_connections are not enough for current traffic",
                     ),
                     commands=(
                         {
-                            "command": "journalctl -u nginx --no-pager -n 80",
-                            "description": "Nginx servis hatalarını incele",
+                            "command": "systemctl status nginx --no-pager",
+                            "description": "Nginx servis durumunu ve son hata özetini kontrol et",
                             "risk_level": "low",
                         },
                         {
-                            "command": "systemctl restart nginx",
-                            "description": "Nginx'i yeniden başlat",
-                            "risk_level": "medium",
+                            "command": "journalctl -u nginx --no-pager -n 80",
+                            "description": "Nginx servis loglarında çökme nedenini incele",
+                            "risk_level": "low",
                         },
                         {
-                            "command": "top -o %CPU",
-                            "description": "CPU tüketen süreçleri canlı izle",
+                            "command": "ss -ltnp | grep -E '(:80|:443|api.sock)'",
+                            "description": "Beklenen port veya socket dinleniyor mu kontrol et",
                             "risk_level": "low",
                         },
                     ),
-                    confidence=0.88,
-                    created_delta=timedelta(minutes=15),
+                    confidence=0.86,
+                    created_delta=timedelta(minutes=14),
                 ),
             ),
         ),
@@ -185,35 +223,38 @@ def _demo_specs() -> tuple[DemoServerSpec, ...]:
                     alert_dedupe_key="disk_threshold",
                     category="disk_issue",
                     severity="high",
-                    summary="prod-db-01 üzerinde disk doluluğu kritik eşikte ve PostgreSQL dosya genişletme hataları görülüyor.",
+                    summary=(
+                        "[DEMO] prod-db-01 üzerinde disk doluluğu kritik eşikte ve "
+                        "PostgreSQL dosya genişletme hatası raporluyor."
+                    ),
                     causes=(
-                        "WAL veya geçici dosyalar beklenenden hızlı büyümüş olabilir.",
-                        "Yedekleme zamanlayıcısı başarısız olduğu için eski arşivler temizlenmemiş olabilir.",
+                        "PostgreSQL WAL, geçici dosya veya tablo büyümesi diski doldurmuş olabilir.",
+                        "backup.timer başarısız olduğu için eski yedek veya arşiv dosyaları temizlenmemiş olabilir.",
                     ),
                     evidence_lines=(
-                        "[METRIC] / disk %96.8",
+                        "[METRIC] Disk kullanımı kritik: %96.8",
                         "[ERROR] /var/log/postgresql/postgresql-16-main.log: could not extend file: No space left on device",
                         "[SERVICE] backup.timer failed",
                     ),
                     commands=(
                         {
                             "command": "df -h /var/lib/postgresql",
-                            "description": "PostgreSQL veri dizini doluluğunu kontrol et",
+                            "description": "PostgreSQL veri dizininin disk doluluğunu kontrol et",
                             "risk_level": "low",
                         },
                         {
                             "command": "du -xh /var/lib/postgresql | sort -h | tail -20",
-                            "description": "En büyük dizinleri listele",
+                            "description": "En fazla yer kaplayan PostgreSQL alt dizinlerini listele",
                             "risk_level": "low",
                         },
                         {
-                            "command": "find /var/lib/postgresql -name '*.tmp' -delete",
-                            "description": "Geçici dosyaları sil",
-                            "risk_level": "high",
+                            "command": "systemctl status backup.timer --no-pager",
+                            "description": "Yedekleme zamanlayıcısının neden başarısız olduğunu incele",
+                            "risk_level": "low",
                         },
                     ),
-                    confidence=0.83,
-                    created_delta=timedelta(minutes=44),
+                    confidence=0.84,
+                    created_delta=timedelta(minutes=42),
                 ),
             ),
         ),
@@ -260,19 +301,40 @@ def _demo_specs() -> tuple[DemoServerSpec, ...]:
     )
 
 
-async def _delete_existing_demo_data(db: AsyncSession) -> None:
-    """Önceki demo verisini, kullanıcı verisine dokunmadan temizler."""
+async def _reset_existing_demo_data(
+    db: AsyncSession,
+    expected_hostnames: set[str],
+) -> dict[str, Server]:
+    """Önceki demo child verisini temizler, mevcut demo server ID'lerini korur."""
     result = await db.execute(
-        select(Server.id).where(Server.api_key.like(f"{DEMO_API_KEY_PREFIX}%"))
+        select(Server).where(Server.hostname.like(f"%{DEMO_HOST_SUFFIX}"))
     )
-    server_ids = list(result.scalars().all())
+    existing_servers = {
+        server.hostname: server
+        for server in result.scalars().all()
+    }
+    server_ids = [server.id for server in existing_servers.values()]
     if not server_ids:
-        return
+        return {}
 
     for model in (AIAnalysis, Alert, LogEntry, ServiceStatus, Metric):
         await db.execute(delete(model).where(model.server_id.in_(server_ids)))
-    await db.execute(delete(Server).where(Server.id.in_(server_ids)))
+
+    stale_server_ids = [
+        server.id
+        for hostname, server in existing_servers.items()
+        if hostname not in expected_hostnames
+    ]
+    if stale_server_ids:
+        await db.execute(delete(Server).where(Server.id.in_(stale_server_ids)))
+        existing_servers = {
+            hostname: server
+            for hostname, server in existing_servers.items()
+            if hostname in expected_hostnames
+        }
+
     await db.flush()
+    return existing_servers
 
 
 def _metric_timestamps(reference: datetime) -> list[datetime]:
@@ -488,23 +550,27 @@ async def seed_demo_data(db: AsyncSession, *, reset: bool = True) -> DemoSeedRes
     """Demo verisini oluşturur.
 
     reset=True önceki demo verisini silip tekrar üretir. Kullanıcının manuel
-    oluşturduğu kayıtlar korunur çünkü yalnızca demo API key prefix'i hedeflenir.
+    oluşturduğu kayıtlar korunur çünkü yalnızca demo hostname suffix'i hedeflenir.
     """
     existing_demo = await db.scalar(
-        select(Server.id).where(Server.api_key.like(f"{DEMO_API_KEY_PREFIX}%")).limit(1)
+        select(Server.id).where(Server.hostname.like(f"%{DEMO_HOST_SUFFIX}")).limit(1)
     )
     if existing_demo and not reset:
         return DemoSeedResult(skipped=True)
 
-    if reset:
-        await _delete_existing_demo_data(db)
+    reference_at = await _demo_reference_from_existing_data(db)
 
-    now_aware = datetime.now(UTC).replace(microsecond=0)
+    now_aware = reference_at or _initial_demo_reference()
     # Eski şemada yalnızca servers.last_seen timezone-aware; metrik/log/alert
     # tarih kolonları PostgreSQL'de TIMESTAMP WITHOUT TIME ZONE.
     now = now_aware.replace(tzinfo=None)
     counts = DemoSeedResult()
     server_specs = _demo_specs()
+    existing_servers: dict[str, Server] = {}
+
+    if reset:
+        expected_hostnames = {spec.hostname for spec in server_specs}
+        existing_servers = await _reset_existing_demo_data(db, expected_hostnames)
 
     metrics_count = 0
     logs_count = 0
@@ -515,18 +581,21 @@ async def seed_demo_data(db: AsyncSession, *, reset: bool = True) -> DemoSeedRes
     for spec in server_specs:
         last_seen = now_aware - spec.last_seen_delta if spec.last_seen_delta else None
         reference = now - spec.last_seen_delta if spec.last_seen_delta else now
-        server = Server(
-            name=spec.name,
-            hostname=spec.hostname,
-            ip_address=spec.ip_address,
-            api_key=f"{DEMO_API_KEY_PREFIX}{spec.key}",
-            environment=spec.environment,
-            group_name=spec.group_name,
-            tags=list(spec.tags),
-            status=spec.status,
-            last_seen=last_seen,
-        )
-        db.add(server)
+        server = existing_servers.get(spec.hostname)
+        if server is None:
+            server = Server(hostname=spec.hostname)
+            db.add(server)
+
+        server.name = spec.name
+        server.hostname = spec.hostname
+        server.ip_address = spec.ip_address
+        server.api_key = hash_api_key(f"{DEMO_API_KEY_PREFIX}{spec.key}")
+        server.environment = spec.environment
+        server.group_name = spec.group_name
+        server.tags = list(spec.tags)
+        server.status = spec.status
+        server.last_seen = last_seen
+        server.api_key_revoked_at = None
         await db.flush()
 
         metric_rows = _build_metrics(spec, server.id, reference)

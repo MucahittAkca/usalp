@@ -1,7 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useState } from "react";
+import { use, useEffect, useState } from "react";
 import useSWR from "swr";
 import { AppShell } from "@/components/layout/AppShell";
 import { MetricGrid } from "@/components/metrics/MetricGrid";
@@ -51,10 +50,9 @@ function TabNav({ serverId, active }: { serverId: number; active: TabKey }) {
       aria-label="Sunucu detay sekmeleri"
     >
       {TABS.map((tab) => (
-        <Link
+        <a
           key={tab.key}
           href={`/servers/${serverId}${tab.suffix}`}
-          replace
           className={cn(
             "px-5 py-3 text-sm font-medium transition-colors",
             active === tab.key
@@ -64,7 +62,7 @@ function TabNav({ serverId, active }: { serverId: number; active: TabKey }) {
           aria-current={active === tab.key ? "page" : undefined}
         >
           {tab.label}
-        </Link>
+        </a>
       ))}
     </nav>
   );
@@ -75,11 +73,12 @@ function TabNav({ serverId, active }: { serverId: number; active: TabKey }) {
 // ---------------------------------------------------------------------------
 
 interface ServerDetailPageProps {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 export default function ServerDetailPage({ params }: ServerDetailPageProps) {
-  const serverId = Number(params.id);
+  const { id } = use(params);
+  const serverId = Number(id);
   const [activeTab, setActiveTab] = useState<TabKey>("metrics");
   const [newApiKey, setNewApiKey] = useState<string | null>(null);
   const [keyActionError, setKeyActionError] = useState<string | null>(null);

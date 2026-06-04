@@ -1,5 +1,5 @@
 server_id: web-server-01
-backend_url: http://localhost:8000
+backend_url: https://monitoring.example.com
 api_key: usalp-agent-change-me
 
 intervals:
@@ -7,7 +7,7 @@ intervals:
   slow: 60
 
 queue:
-  dir: queue
+  dir: /var/lib/usalp-agent/queue
   max_items: 1000
   flush_batch_size: 25
 

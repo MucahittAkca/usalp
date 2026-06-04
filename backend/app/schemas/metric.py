@@ -14,7 +14,7 @@ class CpuData(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     percent: float = Field(ge=0, le=100)
-    per_core: list[float] = []
+    per_core: list[float] = Field(default_factory=list, max_length=256)
     load_avg_1: float = Field(default=0.0, ge=0)
     load_avg_5: float = Field(default=0.0, ge=0)
     load_avg_15: float = Field(default=0.0, ge=0)
@@ -39,7 +39,7 @@ class DiskData(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str
+    path: str = Field(min_length=1, max_length=512)
     total_bytes: int = Field(ge=0)
     used_bytes: int = Field(ge=0)
     free_bytes: int = Field(ge=0)
@@ -53,7 +53,7 @@ class NetworkData(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    interface: str
+    interface: str = Field(min_length=1, max_length=64)
     bytes_sent_per_sec: float = Field(ge=0)
     bytes_recv_per_sec: float = Field(ge=0)
     packets_sent_per_sec: float = Field(default=0.0, ge=0)
@@ -68,10 +68,10 @@ class ProcessData(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     pid: int = Field(ge=0)
-    name: str
+    name: str = Field(min_length=1, max_length=255)
     cpu_percent: float = Field(ge=0)
     memory_percent: float = Field(ge=0, le=100)
-    status: str
+    status: str = Field(min_length=1, max_length=50)
 
 
 class ServiceData(BaseModel):
@@ -79,9 +79,9 @@ class ServiceData(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str
-    status: str
-    sub_state: str = ""
+    name: str = Field(min_length=1, max_length=255)
+    status: str = Field(min_length=1, max_length=50)
+    sub_state: str = Field(default="", max_length=100)
     since_seconds: int | None = Field(default=None, ge=0)
 
 
@@ -90,10 +90,10 @@ class LogData(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    source_file: str
-    level: str
-    message: str
-    raw_line: str
+    source_file: str = Field(min_length=1, max_length=512)
+    level: str = Field(min_length=1, max_length=20)
+    message: str = Field(default="", max_length=2_000)
+    raw_line: str = Field(min_length=1, max_length=8_000)
     logged_at: datetime
 
 
@@ -102,15 +102,15 @@ class MetricPayload(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    server_id: str
+    server_id: str = Field(min_length=1, max_length=255)
     collected_at: datetime
     cpu: CpuData
     memory: MemoryData
-    disks: list[DiskData] = []
-    networks: list[NetworkData] = []
-    top_processes: list[ProcessData] = []
-    services: list[ServiceData] = []
-    log_entries: list[LogData] = []
+    disks: list[DiskData] = Field(default_factory=list, max_length=128)
+    networks: list[NetworkData] = Field(default_factory=list, max_length=128)
+    top_processes: list[ProcessData] = Field(default_factory=list, max_length=50)
+    services: list[ServiceData] = Field(default_factory=list, max_length=100)
+    log_entries: list[LogData] = Field(default_factory=list, max_length=200)
 
 
 class MetricOut(BaseModel):
