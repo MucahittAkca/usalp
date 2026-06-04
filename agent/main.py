@@ -12,6 +12,8 @@ Backend API'ye gönderilir.  slow_cycle yalnızca ağır collector'ları
 from __future__ import annotations
 
 import argparse
+import logging
+import os
 import time
 from pathlib import Path
 
@@ -28,6 +30,20 @@ log = structlog.get_logger()
 
 _cached_disks: list = []
 _cached_processes: list = []
+
+
+def _log_level_from_env(var_name: str = "LOG_LEVEL", default: str = "INFO") -> int:
+    """Read a logging level from the environment without relying on structlog internals."""
+    raw_level = os.getenv(var_name, default).strip()
+    if not raw_level:
+        raw_level = default
+
+    try:
+        return int(raw_level)
+    except ValueError:
+        pass
+
+    return logging.getLevelNamesMapping().get(raw_level.upper(), logging.INFO)
 
 
 def _slow_cycle(config: AgentConfig) -> None:
@@ -127,7 +143,7 @@ def main() -> None:
 
     structlog.configure(
         wrapper_class=structlog.make_filtering_bound_logger(
-            structlog.get_level_from_env("LOG_LEVEL", default="INFO")
+            _log_level_from_env()
         ),
     )
 

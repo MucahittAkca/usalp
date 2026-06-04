@@ -129,8 +129,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "${SCRIPT_DIR}/main.py" && -f "${SCRIPT_DIR}/pyproject.toml" ]]; then
+SCRIPT_DIR=""
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+if [[ -n "$SCRIPT_DIR" && -f "${SCRIPT_DIR}/main.py" && -f "${SCRIPT_DIR}/pyproject.toml" ]]; then
   info "Copying agent files from local source"
   mkdir -p "${TMP_DIR}/usalp-agent"
   cp -a \
