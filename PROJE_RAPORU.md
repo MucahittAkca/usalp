@@ -303,13 +303,69 @@ docker compose -p usalp_demo down -v
 
 ### 10.2 Production Kurulum
 
-Production kurulum için:
+Production kurulum için merkezi kontrol düzlemi sunucusunda public DNS kaydı,
+80/443 portlarının açık olması, Docker Compose v2, `git`, `curl` ve `openssl`
+gerekir. Boş bir Ubuntu sunucuda ön hazırlık:
 
 ```bash
+apt update
+apt install -y git curl openssl docker.io docker-compose-plugin
+systemctl enable --now docker
+docker compose version
+```
+
+Kalıcı production ortamında gerçek domain kullanılması önerilir. Geçici test
+veya sunum ortamında domain henüz hazır değilse public IP'yi çözen
+`IP.sslip.io` formatı kullanılabilir.
+
+Uygulama kurulumu:
+
+```bash
+git clone https://github.com/MucahittAkca/usalp.git /opt/usalp
+cd /opt/usalp
 ./scripts/setup-prod.sh
 ```
 
-Bu script `.env` dosyası oluşturur, secret değerleri hazırlar, dashboard şifresini hash'ler ve Docker Compose ile sistemi ayağa kaldırır.
+Bu script `.env` dosyası oluşturur, secret değerleri hazırlar, dashboard
+şifresini hash'ler, DNS/port/outbound HTTPS kontrollerini yapar ve Docker
+Compose ile sistemi ayağa kaldırır.
+
+Gerçek AI analizi için production sunucusundaki `.env` dosyasına
+`LLM_API_KEY` eklenir ve backend yeniden oluşturulur:
+
+```bash
+LLM_API_KEY=sk-or-v1-...
+docker compose up -d --force-recreate backend
+```
+
+### 10.3 Agent Kurulumu
+
+Agent, izlenecek Linux sunucuda çalışır ve merkezi backend'e HTTPS üzerinden
+veri gönderir. Agent sunucusunda systemd, outbound HTTPS erişimi, Python 3.12+,
+`python3-venv`, `curl` ve `tar` gerekir. Boş bir Ubuntu sunucuda:
+
+```bash
+apt update
+apt install -y curl tar python3 python3-venv
+```
+
+Dashboard'da yeni sunucu eklendiğinde tek kullanımlık agent API anahtarı ve
+kurulum komutu üretilir. Komut genel olarak şu formdadır:
+
+```bash
+curl -fsSL https://domain/install.sh | sudo bash -s -- --api-key <key> --backend-url https://domain
+```
+
+Kurulumdan sonra agent servis durumu ve logları şu komutlarla kontrol edilir:
+
+```bash
+systemctl status usalp-agent --no-pager
+journalctl -u usalp-agent -n 50 --no-pager
+```
+
+Agent dosyaları `/opt/usalp-agent`, yapılandırma dosyası
+`/etc/usalp-agent/agent.yaml`, kalıcı kuyruk verileri
+`/var/lib/usalp-agent/queue` altında tutulur.
 
 ---
 
@@ -322,8 +378,9 @@ Projede backend, dashboard, shell script ve Docker/Caddy yapılandırmaları tes
 ```bash
 timeout 180 backend/.venv/bin/pytest backend/tests
 backend/.venv/bin/ruff check backend/app backend/tests
-cd dashboard && npm run lint
-cd dashboard && npm run build
+(cd agent && pytest)
+(cd dashboard && npm run lint)
+(cd dashboard && npm run build)
 bash -n demo.sh scripts/setup-prod.sh
 docker compose config --quiet
 caddy validate --config /etc/caddy/Caddyfile
@@ -357,6 +414,9 @@ Son test sonucunda backend test paketinde `199 passed` sonucu alınmıştır.
 | Eski container port 80'i tutabiliyordu | `demo.sh` içine `down --remove-orphans` eklendi |
 | Caddy boş ACME email durumunda hata verebiliyordu | Demo için güvenli default email değeri tanımlandı |
 | Gerçek LLM key depoya eklenemezdi | LLM key opsiyonel yapıldı, demo için `[DEMO]` analizleri seed edildi |
+| Boş VPS üzerinde Docker kurulu değildi | README ve rapora Docker Compose v2 ön hazırlık komutları eklendi |
+| Agent installer pipe ile çalışırken script yolunu okuyamıyordu | Installer `curl ... \| bash` kullanımına uyumlu hale getirildi |
+| Yeni `structlog` sürümünde agent başlangıçta hata veriyordu | Log seviyesi okuma kodu `structlog` iç API'sine bağımlı olmayacak şekilde güncellendi |
 
 ---
 
@@ -366,7 +426,7 @@ Proje çalışır ve demo için hazır durumdadır; ancak aşağıdaki sınırla
 
 - Gerçek AI analizi için kullanıcının kendi LLM API key'ini sağlaması gerekir.
 - Demo ortamındaki `[DEMO]` analizler gerçek LLM çağrısı değildir.
-- Production kurulumu için gerçek domain, açık 80/443 portları ve güvenli `.env` gereklidir.
+- Kalıcı production kurulumu için gerçek domain, açık 80/443 portları ve güvenli `.env` gereklidir; geçici testte `IP.sslip.io` formatı kullanılabilir.
 - Demo kullanıcı bilgileri kolay sunum için basittir; production'da kullanılmamalıdır.
 - Üniversite demosunda internet bağlantısı yoksa harici LLM analizi çalışmaz; ancak demo verisi ve panel çalışmaya devam eder.
 

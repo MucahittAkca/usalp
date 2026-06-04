@@ -14,8 +14,25 @@ AI destekli Linux sunucu izleme ve log analiz platformu.
 Merkezi kontrol düzlemi için bir Linux sunucu, gerçek DNS kaydı ve 80/443
 portlarının açık olması gerekir.
 
+Boş bir Ubuntu sunucuda önce temel araçları ve Docker Compose v2 eklentisini
+kurun:
+
 ```bash
-git clone <repo-url> /opt/usalp
+apt update
+apt install -y git curl openssl docker.io docker-compose-plugin
+systemctl enable --now docker
+docker compose version
+```
+
+Kalıcı production için domain kullanılması önerilir. Geçici testte kendi domaininiz
+yoksa public IP'yi çözen `sslip.io` formatı kullanılabilir:
+
+```text
+167.233.57.73.sslip.io
+```
+
+```bash
+git clone https://github.com/MucahittAkca/usalp.git /opt/usalp
 cd /opt/usalp
 ./scripts/setup-prod.sh
 ```
@@ -82,10 +99,39 @@ kullanır. Demo ortamını tamamen temizlemek için:
 docker compose -p usalp_demo down -v
 ```
 
+## Gerçek AI/LLM Kullanımı
+
+Gerçek AI analizi için OpenRouter uyumlu bir API anahtarını `.env` dosyasına
+yazın ve backend'i yeniden oluşturun:
+
+```bash
+cd /opt/usalp
+nano .env
+```
+
+```bash
+LLM_API_KEY=sk-or-v1-...
+LLM_BASE_URL=https://openrouter.ai/api
+LLM_MODEL=anthropic/claude-sonnet-4
+```
+
+```bash
+docker compose up -d --force-recreate backend
+docker compose logs -f backend
+```
+
 ## Agent Kurulumu
 
 Dashboard'da yeni sunucu ekleyince tek kullanımlık API anahtarı ve kurulum komutu
 üretilir. İzlenecek Linux sunucuda bu komutu root yetkisiyle çalıştırın.
+
+Agent kurulacak sunucuda systemd, outbound HTTPS erişimi, Python 3.12+, `venv`,
+`curl` ve `tar` gerekir. Boş bir Ubuntu sunucuda:
+
+```bash
+apt update
+apt install -y curl tar python3 python3-venv
+```
 
 Production komutu şu formdadır:
 
@@ -102,6 +148,13 @@ Installer plain HTTP backend URL'lerini reddeder; yalnızca lokal geliştirme i�
 `--allow-insecure` verilebilir. Agent runtime dosyaları `/opt/usalp-agent`,
 config dosyası `/etc/usalp-agent/agent.yaml`, disk kuyruğu
 `/var/lib/usalp-agent/queue` altında tutulur.
+
+Kurulumdan sonra durum ve log kontrolü:
+
+```bash
+systemctl status usalp-agent --no-pager
+journalctl -u usalp-agent -n 50 --no-pager
+```
 
 Yardımcı komutlar:
 
