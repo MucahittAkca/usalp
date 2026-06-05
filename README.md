@@ -19,7 +19,7 @@ kurun:
 
 ```bash
 apt update
-apt install -y git curl openssl docker.io docker-compose-plugin
+apt install -y git curl openssl docker.io docker-compose
 systemctl enable --now docker
 docker compose version
 ```
