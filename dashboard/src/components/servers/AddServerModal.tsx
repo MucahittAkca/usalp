@@ -326,6 +326,8 @@ export function AddServerModal({ onCreated }: Props) {
                       </div>
                       <p className="mt-2 text-xs text-slate-400">
                         Bu komutu izlemek istediğiniz sunucunun terminalinde çalıştırın.
+                        Agent başladıktan sonra ilk metrik gönderimi ve dashboard&apos;da
+                        online görünmesi 30-60 saniye sürebilir.
                       </p>
                     </div>
 

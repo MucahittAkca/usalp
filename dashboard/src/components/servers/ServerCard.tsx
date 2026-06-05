@@ -59,7 +59,9 @@ function MetricRow({ label, value, warn = 80, crit = 90 }: MetricRowProps) {
 function MetricsSection({ metric, offline }: { metric: Metric | null; offline: boolean }) {
   if (offline) {
     return (
-      <p className="text-xs text-slate-400 italic">Sunucu çevrimdışı — metrik alınamıyor</p>
+      <p className="text-xs text-slate-400 italic">
+        Sunucu çevrimdışı — agent yeni kurulduysa ilk metrik 30-60 saniye sürebilir
+      </p>
     );
   }
 
