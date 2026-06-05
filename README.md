@@ -229,6 +229,9 @@ npm run build
 
 Production ortamında `SECRET_KEY` ve dashboard şifresi/hash'i güvenli değerlerle
 tanımlanmalıdır. Production backend `DASHBOARD_PASSWORD_HASH` olmadan açılmaz.
+Bu değer sha512-crypt veya bcrypt formatında elle yazılacaksa `.env` içinde tek
+tırnakla saklanmalıdır; aksi halde Docker Compose hash içindeki `$` parçalarını
+değişken interpolasyonu olarak yorumlayabilir.
 Agent API anahtarları veritabanında hash'lenmiş saklanır; ham anahtar yalnızca
 sunucu oluşturma veya anahtar yenileme yanıtında gösterilir.
 

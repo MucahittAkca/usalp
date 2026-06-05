@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Activity, Loader2 } from "lucide-react";
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import { setToken } from "@/lib/auth";
 
 export default function LoginPage() {
@@ -23,8 +23,10 @@ export default function LoginPage() {
       setToken(res.access_token);
       router.push("/");
     } catch (err) {
-      if (err instanceof Error && err.message.includes("401")) {
+      if (err instanceof ApiError && err.status === 401) {
         setError("Kullanıcı adı veya şifre hatalı.");
+      } else if (err instanceof ApiError && err.status === 429) {
+        setError("Çok fazla başarısız giriş denemesi. Birkaç dakika sonra tekrar deneyin.");
       } else {
         setError("Backend'e bağlanılamıyor. Servisin çalıştığından emin olun.");
       }
