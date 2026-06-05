@@ -248,6 +248,45 @@ class AiParseError(Exception):
     """Claude yanıtı beklenilen JSON şemasına parse edilemedi."""
 
 
+def _content_block_text(block: object) -> str | None:
+    """Anthropic/OpenRouter content block içinden text alanını güvenli çıkarır."""
+    if isinstance(block, dict):
+        block_type = block.get("type")
+        text = block.get("text")
+        if block_type == "text" and isinstance(text, str):
+            return text
+        return None
+
+    block_type = getattr(block, "type", None)
+    text = getattr(block, "text", None)
+    if block_type == "text" and isinstance(text, str):
+        return text
+
+    return None
+
+
+def _extract_message_text(content: object) -> str:
+    """Yanıttaki text bloklarını birleştirir; thinking/tool bloklarını atlar."""
+    if isinstance(content, str):
+        text = content.strip()
+        if text:
+            return text
+        raise AiParseError("Claude yanıtında text content yok.")
+
+    if not isinstance(content, list):
+        raise AiParseError("Claude yanıt content formatı desteklenmiyor.")
+
+    text_parts = [
+        text
+        for block in content
+        if (text := _content_block_text(block)) is not None
+    ]
+    raw_text = "\n".join(text_parts).strip()
+    if not raw_text:
+        raise AiParseError("Claude yanıtında text bloğu yok.")
+    return raw_text
+
+
 async def call_claude(
     context_package: str,
     *,
@@ -281,7 +320,7 @@ async def call_claude(
             ],
         )
 
-        raw_text = message.content[0].text
+        raw_text = _extract_message_text(message.content)
         clean = raw_text.strip().removeprefix("```json").removesuffix("```").strip()
 
         logger.info(

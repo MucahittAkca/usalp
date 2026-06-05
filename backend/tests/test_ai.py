@@ -22,6 +22,7 @@ from app.services.ai_analyzer import (
     AI_COOLDOWN_SECONDS,
     MAX_CONTEXT_CHARS,
     AiParseError,
+    _extract_message_text,
     _format_logs,
     _format_services,
     build_context_package,
@@ -567,7 +568,48 @@ async def test_context_package_failed_services_shown(db_session: AsyncSession) -
 
 
 # ===================================================================
-# 6. can_trigger_analysis — cooldown kontrolü
+# 6. Claude content parsing — thinking/text block uyumluluğu
+# ===================================================================
+
+
+class _FakeBlock:
+    def __init__(self, block_type: str, **values: str) -> None:
+        self.type = block_type
+        for key, value in values.items():
+            setattr(self, key, value)
+
+
+def test_extract_message_text_skips_thinking_blocks() -> None:
+    """Claude thinking block döndürürse text blokları seçilir."""
+    content = [
+        _FakeBlock("thinking", thinking="internal reasoning"),
+        _FakeBlock("text", text=json.dumps(VALID_AI_OUTPUT)),
+    ]
+
+    assert _extract_message_text(content) == json.dumps(VALID_AI_OUTPUT)
+
+
+def test_extract_message_text_joins_multiple_text_blocks() -> None:
+    """Birden fazla text block gelirse sırayla birleştirilir."""
+    content = [
+        {"type": "text", "text": '{"severity": "high",'},
+        {"type": "thinking", "thinking": "hidden"},
+        {"type": "text", "text": '"category": "config_error"}'},
+    ]
+
+    assert _extract_message_text(content) == (
+        '{"severity": "high",\n"category": "config_error"}'
+    )
+
+
+def test_extract_message_text_rejects_response_without_text() -> None:
+    """Sadece thinking block varsa parse edilebilir metin yoktur."""
+    with pytest.raises(AiParseError):
+        _extract_message_text([_FakeBlock("thinking", thinking="internal reasoning")])
+
+
+# ===================================================================
+# 7. can_trigger_analysis — cooldown kontrolü
 # ===================================================================
 
 
@@ -609,7 +651,7 @@ async def test_cooldown_per_server(db_session: AsyncSession) -> None:
 
 
 # ===================================================================
-# 7. trigger_analysis — ana tetikleme (mock Claude)
+# 8. trigger_analysis — ana tetikleme (mock Claude)
 # ===================================================================
 
 
@@ -764,7 +806,7 @@ async def test_trigger_analysis_unexpected_error_returns_none(
 
 
 # ===================================================================
-# 8. API endpoint testleri — POST /ai/analyze
+# 9. API endpoint testleri — POST /ai/analyze
 # ===================================================================
 
 
