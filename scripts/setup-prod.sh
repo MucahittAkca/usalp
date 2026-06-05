@@ -74,8 +74,14 @@ prompt_secret() {
 
 trim_outer_whitespace() {
   local value="$1"
-  value="${value#"${value%%[![:space:]]*}"}"
-  value="${value%"${value##*[![:space:]]}"}"
+
+  while [[ "$value" == [[:space:]]* ]]; do
+    value="${value:1}"
+  done
+  while [[ "$value" == *[[:space:]] ]]; do
+    value="${value:0:${#value}-1}"
+  done
+
   printf '%s' "$value"
 }
 
