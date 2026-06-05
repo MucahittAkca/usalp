@@ -39,7 +39,9 @@ cd /opt/usalp
 
 Script `.env` üretir, dashboard şifresini hash'ler, production secret'larını
 oluşturur, DNS/port/outbound HTTPS kontrollerini yapar ve `docker compose up -d --build`
-çalıştırır. Dashboard ve API aynı origin üzerinden servis edilir:
+çalıştırır. Health hazır olduktan sonra kurulumda girilen dashboard kullanıcı
+adı/şifresiyle auth self-check yapar. Dashboard ve API aynı origin üzerinden
+servis edilir:
 
 - Dashboard: `https://domain`
 - Health: `https://domain/health`

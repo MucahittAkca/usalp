@@ -65,6 +65,55 @@ prompt_secret() {
   printf '%s' "$value"
 }
 
+prompt_secret_confirm() {
+  local var_name="$1"
+  local prompt="$2"
+  local value="${!var_name:-}"
+  local confirm
+
+  if [[ -n "$value" ]]; then
+    printf '%s' "$value"
+    return
+  fi
+
+  while true; do
+    read -r -s -p "$prompt: " value
+    echo
+    read -r -s -p "$prompt (again): " confirm
+    echo
+
+    if [[ "$value" == "$confirm" ]]; then
+      printf '%s' "$value"
+      return
+    fi
+
+    echo "Dashboard passwords did not match. Please try again." >&2
+  done
+}
+
+json_string() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf '"%s"' "$value"
+}
+
+verify_dashboard_login() {
+  local domain="$1"
+  local username="$2"
+  local password="$3"
+  local payload
+
+  payload="{\"username\":$(json_string "$username"),\"password\":$(json_string "$password")}"
+  printf '%s' "$payload" | curl -fsS --max-time 10 \
+    -H "Content-Type: application/json" \
+    --data-binary @- \
+    "https://${domain}/api/v1/auth/token" >/dev/null
+}
+
 random_secret() {
   openssl rand -base64 36 | tr -d '\n'
 }
@@ -99,7 +148,7 @@ fi
 DOMAIN="$(prompt_value USALP_DOMAIN "Domain for Usalp")"
 ACME_MAIL="$(prompt_value ACME_EMAIL "Let's Encrypt email")"
 DASHBOARD_USER="$(prompt_value DASHBOARD_USERNAME "Dashboard username" "admin")"
-DASHBOARD_PASS="$(prompt_secret DASHBOARD_PASSWORD "Dashboard password")"
+DASHBOARD_PASS="$(prompt_secret_confirm DASHBOARD_PASSWORD "Dashboard password")"
 LLM_KEY="${LLM_API_KEY:-}"
 
 if [[ ! "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ || "$DOMAIN" != *.* ]]; then
@@ -191,6 +240,12 @@ docker compose up -d --build
 echo "Waiting for https://${DOMAIN}/health ..."
 for _ in $(seq 1 60); do
   if curl -fsS --max-time 5 "https://${DOMAIN}/health" >/dev/null; then
+    if ! verify_dashboard_login "$DOMAIN" "$DASHBOARD_USER" "$DASHBOARD_PASS"; then
+      echo "Health check passed, but dashboard login self-check failed." >&2
+      echo "Restart backend and inspect auth logs with: docker compose logs -f backend" >&2
+      exit 1
+    fi
+    echo "Dashboard credentials verified."
     echo "Usalp is ready: https://${DOMAIN}"
     exit 0
   fi
