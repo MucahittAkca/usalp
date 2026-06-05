@@ -50,8 +50,8 @@ servis edilir:
 Browser'dan girişte 401 alınıyorsa backend çalışıyor ama browser'dan gönderilen
 bilgiler kurulumda girilen bilgilerle eşleşmiyor demektir. Kullanıcı adı
 büyük/küçük harfe duyarlıdır; setup script'i görünmez boşluk kaynaklı hataları
-engellemek için kullanıcı adını sınırlar ve şifrenin başında/sonunda boşluk
-kabul etmez. Tek komutla yeni dashboard kullanıcı adı/şifresi üretip backend
+engellemek için kullanıcı adını sınırlar ve şifrenin başındaki/sonundaki boşluğu
+hash'lemeden önce kaldırır. Tek komutla yeni dashboard kullanıcı adı/şifresi üretip backend
 üzerinden doğrulamak için:
 
 ```bash

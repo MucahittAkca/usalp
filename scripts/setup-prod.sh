@@ -72,14 +72,34 @@ prompt_secret() {
   printf '%s' "$value"
 }
 
+trim_outer_whitespace() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+normalize_dashboard_password() {
+  local value="$1"
+  local normalized
+
+  normalized="$(trim_outer_whitespace "$value")"
+  if [[ "$value" != "$normalized" ]]; then
+    echo "Removed leading/trailing whitespace from dashboard password." >&2
+  fi
+  printf '%s' "$normalized"
+}
+
 prompt_secret_confirm() {
   local var_name="$1"
   local prompt="$2"
   local value="${!var_name:-}"
   local confirm
+  local normalized_value
+  local normalized_confirm
 
   if [[ -n "$value" ]]; then
-    printf '%s' "$value"
+    normalize_dashboard_password "$value"
     return
   fi
 
@@ -88,9 +108,11 @@ prompt_secret_confirm() {
     echo
     read -r -s -p "$prompt (again): " confirm
     echo
+    normalized_value="$(normalize_dashboard_password "$value")"
+    normalized_confirm="$(normalize_dashboard_password "$confirm")"
 
-    if [[ "$value" == "$confirm" ]]; then
-      printf '%s' "$value"
+    if [[ "$normalized_value" == "$normalized_confirm" ]]; then
+      printf '%s' "$normalized_value"
       return
     fi
 
