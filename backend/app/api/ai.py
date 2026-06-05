@@ -36,14 +36,29 @@ async def trigger_analysis(
             detail="Bu sunucu için çok yakın zamanda analiz yapıldı. 5 dakika bekleyin.",
         )
 
-    analysis = await ai_analyzer.trigger_analysis(db, server.id)
+    try:
+        analysis = await ai_analyzer.trigger_analysis(
+            db,
+            server.id,
+            raise_on_failure=True,
+        )
+    except ai_analyzer.AiAnalysisUnavailableError as exc:
+        return {
+            "data": None,
+            "meta": {
+                "timestamp": datetime.now(UTC).isoformat(),
+                "reason": exc.code,
+                "message": exc.message,
+            },
+        }
 
     if not analysis:
         return {
             "data": None,
             "meta": {
                 "timestamp": datetime.now(UTC).isoformat(),
-                "message": "AI analiz çalıştırılamadı (API key eksik veya metrik yok)",
+                "reason": "unknown",
+                "message": "AI analiz çalıştırılamadı. Backend loglarını kontrol edin.",
             },
         }
 

@@ -7,6 +7,7 @@ import logging
 import re
 from datetime import UTC, datetime
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -248,6 +249,19 @@ class AiParseError(Exception):
     """Claude yanıtı beklenilen JSON şemasına parse edilemedi."""
 
 
+class AiProviderError(Exception):
+    """LLM sağlayıcısı istek veya yanıt seviyesinde hata döndürdü."""
+
+
+class AiAnalysisUnavailableError(Exception):
+    """Analizin neden üretilemediğini endpoint'e güvenli şekilde taşır."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 def _content_block_text(block: object) -> str | None:
     """Anthropic/OpenRouter content block içinden text alanını güvenli çıkarır."""
     if isinstance(block, dict):
@@ -287,6 +301,127 @@ def _extract_message_text(content: object) -> str:
     return raw_text
 
 
+def _extract_json_text(raw_text: str) -> str:
+    """Model yanıtındaki JSON objesini markdown/reasoning sarmalından ayıklar."""
+    text = raw_text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text).strip()
+
+    if text.startswith("{") and text.endswith("}"):
+        return text
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end > start:
+        return text[start:end + 1]
+
+    return text
+
+
+def _is_openrouter_config() -> bool:
+    """OpenRouter base URL/model ayarı OpenAI-compatible chat endpoint'i kullanır."""
+    base_url = settings.LLM_BASE_URL.lower()
+    return "openrouter.ai" in base_url or settings.LLM_MODEL.startswith("deepseek/")
+
+
+def _openrouter_chat_url() -> str:
+    """LLM_BASE_URL değerinden OpenRouter chat completions URL'sini üretir."""
+    base_url = settings.LLM_BASE_URL.rstrip("/")
+    if base_url.endswith("/chat/completions"):
+        return base_url
+    if base_url.endswith("/api/v1"):
+        return f"{base_url}/chat/completions"
+    if base_url.endswith("/api"):
+        return f"{base_url}/v1/chat/completions"
+    if "openrouter.ai" in base_url:
+        return f"{base_url}/api/v1/chat/completions"
+    return f"{base_url}/chat/completions"
+
+
+def _parse_ai_result(raw_text: str) -> AiAnalysisResult:
+    """Ham model çıktısını beklenen analiz şemasına parse eder."""
+    clean = _extract_json_text(raw_text)
+    parsed = json.loads(clean)
+    return AiAnalysisResult(**parsed)
+
+
+async def _call_openrouter_chat(
+    context_package: str,
+    *,
+    max_retries: int,
+) -> AiAnalysisResult:
+    """OpenRouter OpenAI-compatible chat completions endpoint'ini çağırır."""
+    last_error: AiParseError | None = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(45.0, connect=10.0)) as client:
+                response = await client.post(
+                    _openrouter_chat_url(),
+                    headers={
+                        "Authorization": f"Bearer {settings.LLM_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": settings.LLM_MODEL,
+                        "max_tokens": 1024,
+                        "temperature": 0.2,
+                        "messages": [
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Aşağıdaki sistem verisini analiz et:\n\n"
+                                    f"{context_package}"
+                                ),
+                            },
+                        ],
+                    },
+                )
+                response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500]
+            raise AiProviderError(
+                f"OpenRouter HTTP {e.response.status_code}: {body}"
+            ) from e
+        except httpx.TransportError as e:
+            raise AiProviderError(f"OpenRouter bağlantı hatası: {e}") from e
+
+        body = response.json()
+        choices = body.get("choices") if isinstance(body, dict) else None
+        if not choices:
+            raise AiProviderError("OpenRouter yanıtında choices alanı yok.")
+
+        message = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
+        raw_text = _extract_message_text(message.get("content", ""))
+
+        usage = body.get("usage", {}) if isinstance(body, dict) else {}
+        logger.info(
+            "openrouter_call_complete attempt=%d/%d input_tokens=%s output_tokens=%s model=%s",
+            attempt,
+            max_retries,
+            usage.get("prompt_tokens"),
+            usage.get("completion_tokens"),
+            settings.LLM_MODEL,
+        )
+
+        try:
+            return _parse_ai_result(raw_text)
+        except (json.JSONDecodeError, ValueError) as e:
+            last_error = AiParseError(
+                f"OpenRouter yanıtı parse edilemedi (deneme {attempt}/{max_retries}): {e}"
+            )
+            logger.warning(
+                "openrouter_parse_retry attempt=%d/%d error=%s",
+                attempt,
+                max_retries,
+                e,
+            )
+
+    raise last_error  # type: ignore[misc]
+
+
 async def call_claude(
     context_package: str,
     *,
@@ -296,6 +431,9 @@ async def call_claude(
 
     JSON parse başarısız olursa ``max_retries`` kez yeniden dener.
     """
+    if _is_openrouter_config():
+        return await _call_openrouter_chat(context_package, max_retries=max_retries)
+
     import anthropic
 
     client = anthropic.AsyncAnthropic(
@@ -321,7 +459,6 @@ async def call_claude(
         )
 
         raw_text = _extract_message_text(message.content)
-        clean = raw_text.strip().removeprefix("```json").removesuffix("```").strip()
 
         logger.info(
             "claude_call_complete attempt=%d/%d input_tokens=%d output_tokens=%d",
@@ -332,8 +469,7 @@ async def call_claude(
         )
 
         try:
-            parsed = json.loads(clean)
-            return AiAnalysisResult(**parsed)
+            return _parse_ai_result(raw_text)
         except (json.JSONDecodeError, ValueError) as e:
             last_error = AiParseError(
                 f"Claude yanıtı parse edilemedi (deneme {attempt}/{max_retries}): {e}"
@@ -357,6 +493,8 @@ async def trigger_analysis(
     db: AsyncSession,
     server_id: int,
     alert_id: int | None = None,
+    *,
+    raise_on_failure: bool = False,
 ) -> AIAnalysis | None:
     """Bir sunucu için AI analizi başlatır ve sonucu DB'ye kaydeder.
 
@@ -369,16 +507,31 @@ async def trigger_analysis(
 
     if not settings.LLM_API_KEY:
         logger.warning("LLM_API_KEY tanımlı değil, AI analiz atlanıyor")
+        if raise_on_failure:
+            raise AiAnalysisUnavailableError(
+                "missing_api_key",
+                "LLM_API_KEY tanımlı değil. Production .env dosyasını ve backend restart'ını kontrol edin.",
+            )
         return None
 
     if not await can_trigger_analysis(db, server_id):
         logger.info("ai_cooldown_active server_id=%d", server_id)
+        if raise_on_failure:
+            raise AiAnalysisUnavailableError(
+                "cooldown_active",
+                "Bu sunucu için çok yakın zamanda analiz yapıldı. 5 dakika bekleyin.",
+            )
         return None
 
     try:
         logs, services, latest_metric = await _fetch_context_data(db, server_id)
         if not latest_metric:
             logger.warning("ai_skip_no_metrics server_id=%d", server_id)
+            if raise_on_failure:
+                raise AiAnalysisUnavailableError(
+                    "missing_metrics",
+                    "Bu sunucu için henüz metrik yok. Agent ilk başarılı metrik gönderimini yaptıktan sonra tekrar deneyin.",
+                )
             return None
 
         context = build_context_package(logs, services, latest_metric)
@@ -409,8 +562,23 @@ async def trigger_analysis(
         )
         return analysis
 
+    except AiAnalysisUnavailableError:
+        raise
     except AiParseError as e:
         logger.error("ai_parse_error server_id=%d error=%s", server_id, e)
+        if raise_on_failure:
+            raise AiAnalysisUnavailableError(
+                "parse_error",
+                "AI modeli beklenen JSON formatında yanıt vermedi. LLM_MODEL değerini veya backend loglarını kontrol edin.",
+            ) from e
+        return None
+    except AiProviderError as e:
+        logger.error("ai_provider_error server_id=%d error=%s", server_id, e)
+        if raise_on_failure:
+            raise AiAnalysisUnavailableError(
+                "provider_error",
+                "AI sağlayıcısı isteği tamamlayamadı. OpenRouter API key, model adı, bakiye/rate limit ve LLM_BASE_URL değerlerini kontrol edin.",
+            ) from e
         return None
     except anthropic.APIError as e:
         logger.error(
@@ -419,7 +587,17 @@ async def trigger_analysis(
             e.status_code,
             e,
         )
+        if raise_on_failure:
+            raise AiAnalysisUnavailableError(
+                "provider_error",
+                "AI sağlayıcısı isteği tamamlayamadı. API key, model adı, bakiye/rate limit ve LLM_BASE_URL değerlerini kontrol edin.",
+            ) from e
         return None
-    except Exception:
+    except Exception as e:
         logger.exception("ai_unexpected_error server_id=%d", server_id)
+        if raise_on_failure:
+            raise AiAnalysisUnavailableError(
+                "unexpected_error",
+                "AI analiz beklenmeyen bir backend hatasıyla durdu. Backend loglarını kontrol edin.",
+            ) from e
         return None

@@ -22,10 +22,13 @@ from app.services.ai_analyzer import (
     AI_COOLDOWN_SECONDS,
     MAX_CONTEXT_CHARS,
     AiParseError,
+    AiProviderError,
+    _extract_json_text,
     _extract_message_text,
     _format_logs,
     _format_services,
     build_context_package,
+    call_claude,
     can_trigger_analysis,
     check_prompt_injection,
     sanitize_for_ai,
@@ -608,6 +611,72 @@ def test_extract_message_text_rejects_response_without_text() -> None:
         _extract_message_text([_FakeBlock("thinking", thinking="internal reasoning")])
 
 
+def test_extract_json_text_from_reasoning_wrapper() -> None:
+    """Reasoning/fence ile gelen yanıttan JSON objesi ayıklanır."""
+    wrapped = "<think>internal</think>\n```json\n" + json.dumps(VALID_AI_OUTPUT) + "\n```"
+
+    assert _extract_json_text(wrapped) == json.dumps(VALID_AI_OUTPUT)
+
+
+class _FakeOpenRouterResponse:
+    text = ""
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Ön açıklama\n```json\n"
+                        + json.dumps(VALID_AI_OUTPUT)
+                        + "\n```",
+                    },
+                },
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20},
+        }
+
+
+class _FakeOpenRouterClient:
+    calls: list[dict] = []
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        return None
+
+    async def __aenter__(self) -> _FakeOpenRouterClient:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def post(self, url: str, **kwargs: object) -> _FakeOpenRouterResponse:
+        self.calls.append({"url": url, **kwargs})
+        return _FakeOpenRouterResponse()
+
+
+@pytest.mark.asyncio
+async def test_call_claude_uses_openrouter_chat_for_deepseek() -> None:
+    """OpenRouter/DeepSeek ayarında chat-completions endpoint'i kullanılır."""
+    _FakeOpenRouterClient.calls = []
+    with (
+        patch("app.services.ai_analyzer.httpx.AsyncClient", _FakeOpenRouterClient),
+        patch("app.services.ai_analyzer.settings") as mock_settings,
+    ):
+        mock_settings.LLM_API_KEY = "or-test-key"
+        mock_settings.LLM_BASE_URL = "https://openrouter.ai/api"
+        mock_settings.LLM_MODEL = "deepseek/deepseek-chat-v3.1"
+        result = await call_claude("context")
+
+    assert result.summary == VALID_AI_OUTPUT["summary"]
+    assert _FakeOpenRouterClient.calls[0]["url"] == (
+        "https://openrouter.ai/api/v1/chat/completions"
+    )
+    request_json = _FakeOpenRouterClient.calls[0]["json"]
+    assert request_json["model"] == "deepseek/deepseek-chat-v3.1"
+
+
 # ===================================================================
 # 7. can_trigger_analysis — cooldown kontrolü
 # ===================================================================
@@ -841,6 +910,50 @@ async def test_endpoint_analyze_cooldown_429(
     )
     assert resp.status_code == 429
     assert "5 dakika" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_endpoint_analyze_no_metrics_specific_message(
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict,
+) -> None:
+    """Metrik yoksa genel API key mesajı yerine gerçek sebep döner."""
+    server = await _seed_server(db_session)
+
+    with patch("app.services.ai_analyzer.settings") as mock_settings:
+        mock_settings.LLM_API_KEY = "test-key"
+        resp = await client.post(
+            "/api/v1/ai/analyze", json={"server_id": server.id}, headers=auth_headers,
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"] is None
+    assert body["meta"]["reason"] == "missing_metrics"
+    assert "henüz metrik yok" in body["meta"]["message"]
+
+
+@pytest.mark.asyncio
+@patch("app.services.ai_analyzer.call_claude", new_callable=AsyncMock)
+async def test_endpoint_analyze_provider_error_specific_message(
+    mock_claude: AsyncMock,
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict,
+) -> None:
+    """OpenRouter/model hataları kullanıcıya doğru sebep ile döner."""
+    mock_claude.side_effect = AiProviderError("OpenRouter HTTP 404")
+    server = await _seed_server(db_session)
+    await _seed_metric(db_session, server.id)
+
+    with patch("app.services.ai_analyzer.settings") as mock_settings:
+        mock_settings.LLM_API_KEY = "test-key"
+        resp = await client.post(
+            "/api/v1/ai/analyze", json={"server_id": server.id}, headers=auth_headers,
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"] is None
+    assert body["meta"]["reason"] == "provider_error"
+    assert "OpenRouter API key" in body["meta"]["message"]
 
 
 @pytest.mark.asyncio
