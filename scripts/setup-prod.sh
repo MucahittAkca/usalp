@@ -223,11 +223,6 @@ validate_dashboard_password() {
     echo "Dashboard password must be at least 12 characters." >&2
     return 1
   fi
-  if [[ "$password" =~ ^[[:space:]] || "$password" =~ [[:space:]]$ ]]; then
-    echo "Dashboard password must not start or end with whitespace." >&2
-    echo "Leading/trailing spaces are invisible in browser login and commonly cause 401 errors." >&2
-    return 1
-  fi
   if [[ "$password" =~ [[:cntrl:]] ]]; then
     echo "Dashboard password must not contain control characters." >&2
     return 1
@@ -327,6 +322,7 @@ reset_dashboard_password() {
   existing_username="$(get_env_value DASHBOARD_USERNAME)"
   dashboard_user="$(prompt_value DASHBOARD_USERNAME "Dashboard username" "${existing_username:-admin}")"
   dashboard_pass="$(prompt_secret_confirm DASHBOARD_PASSWORD "New dashboard password")"
+  dashboard_pass="$(normalize_dashboard_password "$dashboard_pass")"
 
   validate_dashboard_username "$dashboard_user" || exit 1
   validate_dashboard_password "$dashboard_pass" || exit 1
@@ -367,6 +363,7 @@ DOMAIN="$(prompt_value USALP_DOMAIN "Domain for Usalp")"
 ACME_MAIL="$(prompt_value ACME_EMAIL "Let's Encrypt email")"
 DASHBOARD_USER="$(prompt_value DASHBOARD_USERNAME "Dashboard username" "admin")"
 DASHBOARD_PASS="$(prompt_secret_confirm DASHBOARD_PASSWORD "Dashboard password")"
+DASHBOARD_PASS="$(normalize_dashboard_password "$DASHBOARD_PASS")"
 LLM_KEY="${LLM_API_KEY:-}"
 
 if [[ ! "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ || "$DOMAIN" != *.* ]]; then
