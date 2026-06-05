@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 
 import pytest
@@ -33,23 +34,37 @@ async def test_login_success(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_login_wrong_password(client: AsyncClient) -> None:
+async def test_login_wrong_password(
+    client: AsyncClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Yanlış şifre ile 401 döner."""
+    caplog.set_level(logging.WARNING, logger="app.api.auth")
+
     resp = await client.post(
         "/api/v1/auth/token",
         json={"username": "admin", "password": "wrong"},
     )
     assert resp.status_code == 401
+    assert "username_match=True password_match=False" in caplog.text
+    assert "wrong" not in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_login_wrong_username(client: AsyncClient) -> None:
+async def test_login_wrong_username(
+    client: AsyncClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Yanlış kullanıcı adı ile 401 döner."""
+    caplog.set_level(logging.WARNING, logger="app.api.auth")
+
     resp = await client.post(
         "/api/v1/auth/token",
         json={"username": "hacker", "password": "admin"},
     )
     assert resp.status_code == 401
+    assert "username_match=False password_match=True" in caplog.text
+    assert "hacker" not in caplog.text
 
 
 @pytest.mark.asyncio

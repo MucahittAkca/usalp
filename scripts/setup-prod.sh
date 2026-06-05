@@ -4,9 +4,14 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage: ./scripts/setup-prod.sh [--force] [--skip-dns-check]
+       ./scripts/setup-prod.sh --reset-dashboard-password
 
 Creates a production .env file, validates host prerequisites, then runs:
   docker compose up -d --build
+
+Maintenance:
+  --reset-dashboard-password  Prompt for dashboard credentials, update .env,
+                              recreate backend, then verify login.
 
 Optional environment variables:
   USALP_DOMAIN              Public DNS name for this control plane
@@ -19,11 +24,13 @@ EOF
 
 FORCE=false
 SKIP_DNS_CHECK=false
+RESET_DASHBOARD_PASSWORD=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --force) FORCE=true; shift ;;
     --skip-dns-check) SKIP_DNS_CHECK=true; shift ;;
+    --reset-dashboard-password) RESET_DASHBOARD_PASSWORD=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage; exit 2 ;;
   esac
@@ -114,6 +121,35 @@ verify_dashboard_login() {
     "https://${domain}/api/v1/auth/token" >/dev/null
 }
 
+wait_for_ready_and_verify() {
+  local domain="$1"
+  local username="$2"
+  local password="$3"
+
+  echo "Waiting for https://${domain}/health ..."
+  for _ in $(seq 1 60); do
+    if curl -fsS --max-time 5 "https://${domain}/health" >/dev/null; then
+      if ! verify_dashboard_login "$domain" "$username" "$password"; then
+        echo "Health check passed, but dashboard login self-check failed." >&2
+        echo "Backend is reachable, but the stored dashboard credentials do not match the provided credentials." >&2
+        echo "Reset them with: ./scripts/setup-prod.sh --reset-dashboard-password" >&2
+        echo "Inspect auth logs with: docker compose logs -f backend" >&2
+        exit 1
+      fi
+      echo "Dashboard credentials verified."
+      echo "Dashboard username: ${username}"
+      echo "If browser login returns 401, reset with: ./scripts/setup-prod.sh --reset-dashboard-password"
+      echo "Usalp is ready: https://${domain}"
+      return
+    fi
+    sleep 5
+  done
+
+  echo "Containers started, but health check did not become ready within 5 minutes." >&2
+  echo "Check logs with: docker compose logs -f caddy backend" >&2
+  exit 1
+}
+
 random_secret() {
   openssl rand -base64 36 | tr -d '\n'
 }
@@ -135,10 +171,164 @@ check_port_free() {
   fi
 }
 
+validate_dashboard_username() {
+  local username="$1"
+
+  if [[ -z "$username" ]]; then
+    echo "Dashboard username cannot be empty." >&2
+    return 1
+  fi
+  if [[ ${#username} -gt 150 ]]; then
+    echo "Dashboard username must be at most 150 characters." >&2
+    return 1
+  fi
+  if [[ ! "$username" =~ ^[A-Za-z0-9._@+-]+$ ]]; then
+    echo "Dashboard username may only contain letters, numbers, '.', '_', '@', '+', and '-'." >&2
+    return 1
+  fi
+}
+
+validate_dashboard_password() {
+  local password="$1"
+
+  if [[ ${#password} -lt 12 ]]; then
+    echo "Dashboard password must be at least 12 characters." >&2
+    return 1
+  fi
+  if [[ "$password" =~ ^[[:space:]] || "$password" =~ [[:space:]]$ ]]; then
+    echo "Dashboard password must not start or end with whitespace." >&2
+    echo "Leading/trailing spaces are invisible in browser login and commonly cause 401 errors." >&2
+    return 1
+  fi
+  if [[ "$password" =~ [[:cntrl:]] ]]; then
+    echo "Dashboard password must not contain control characters." >&2
+    return 1
+  fi
+}
+
+get_env_value() {
+  local key="$1"
+  local file="${2:-.env}"
+  local line
+  local value
+  local first
+  local last
+
+  line="$(grep -E "^${key}=" "$file" | tail -n 1 || true)"
+  if [[ -z "$line" ]]; then
+    return
+  fi
+
+  value="${line#*=}"
+  if [[ ${#value} -ge 2 ]]; then
+    first="${value:0:1}"
+    last="${value: -1}"
+    if [[ "$first" == "$last" && ( "$first" == "'" || "$first" == '"' ) ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+  fi
+  printf '%s' "$value"
+}
+
+set_env_value() {
+  local key="$1"
+  local value="$2"
+  local file="${3:-.env}"
+  local tmp
+  local found=false
+  local line
+
+  tmp="$(mktemp "${file}.tmp.XXXXXX")"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "${key}="* ]]; then
+      printf '%s=%s\n' "$key" "$value" >> "$tmp"
+      found=true
+    else
+      printf '%s\n' "$line" >> "$tmp"
+    fi
+  done < "$file"
+
+  if [[ "$found" != "true" ]]; then
+    printf '%s=%s\n' "$key" "$value" >> "$tmp"
+  fi
+
+  mv "$tmp" "$file"
+  chmod 600 "$file"
+}
+
+domain_from_env() {
+  local url
+  local domain
+
+  url="$(get_env_value USALP_PUBLIC_URL)"
+  if [[ "$url" == https://* ]]; then
+    domain="${url#https://}"
+    domain="${domain%%/*}"
+    printf '%s' "$domain"
+    return
+  fi
+
+  domain="$(get_env_value USALP_SITE_ADDRESS)"
+  domain="${domain#https://}"
+  domain="${domain#http://}"
+  domain="${domain%%/*}"
+  printf '%s' "$domain"
+}
+
+write_dashboard_credentials_env() {
+  local username="$1"
+  local password_hash="$2"
+
+  set_env_value DASHBOARD_USERNAME "$username"
+  set_env_value DASHBOARD_PASSWORD ""
+  set_env_value DASHBOARD_PASSWORD_HASH "'${password_hash}'"
+}
+
+reset_dashboard_password() {
+  local existing_username
+  local dashboard_user
+  local dashboard_pass
+  local dashboard_password_hash
+  local domain
+
+  if [[ ! -f .env ]]; then
+    echo ".env does not exist. Run ./scripts/setup-prod.sh first." >&2
+    exit 1
+  fi
+
+  existing_username="$(get_env_value DASHBOARD_USERNAME)"
+  dashboard_user="$(prompt_value DASHBOARD_USERNAME "Dashboard username" "${existing_username:-admin}")"
+  dashboard_pass="$(prompt_secret_confirm DASHBOARD_PASSWORD "New dashboard password")"
+
+  validate_dashboard_username "$dashboard_user" || exit 1
+  validate_dashboard_password "$dashboard_pass" || exit 1
+
+  dashboard_password_hash="$(hash_password "$dashboard_pass")"
+  umask 077
+  write_dashboard_credentials_env "$dashboard_user" "$dashboard_password_hash"
+
+  echo "Updated .env dashboard credentials."
+  docker compose up -d --force-recreate backend
+
+  domain="$(domain_from_env)"
+  if [[ -z "$domain" || "$domain" == :* ]]; then
+    echo "Could not determine production domain from USALP_PUBLIC_URL or USALP_SITE_ADDRESS." >&2
+    echo "Credentials were updated. Verify manually with: docker compose logs -f backend" >&2
+    exit 1
+  fi
+
+  wait_for_ready_and_verify "$domain" "$dashboard_user" "$dashboard_pass"
+}
+
 require_cmd curl
 require_cmd docker
 require_cmd openssl
 docker compose version >/dev/null
+
+if [[ "$RESET_DASHBOARD_PASSWORD" == "true" ]]; then
+  reset_dashboard_password
+  exit 0
+fi
 
 if [[ -f .env && "$FORCE" != "true" ]]; then
   echo ".env already exists. Re-run with --force to replace it." >&2
@@ -163,10 +353,8 @@ if [[ -z "$ACME_MAIL" || "$ACME_MAIL" != *@* ]]; then
   echo "ACME_EMAIL must be a valid contact email." >&2
   exit 1
 fi
-if [[ ${#DASHBOARD_PASS} -lt 12 ]]; then
-  echo "Dashboard password must be at least 12 characters." >&2
-  exit 1
-fi
+validate_dashboard_username "$DASHBOARD_USER" || exit 1
+validate_dashboard_password "$DASHBOARD_PASS" || exit 1
 
 if [[ "$SKIP_DNS_CHECK" != "true" ]]; then
   getent ahosts "$DOMAIN" >/dev/null || {
@@ -237,21 +425,4 @@ EOF
 echo "Created .env with production defaults."
 docker compose up -d --build
 
-echo "Waiting for https://${DOMAIN}/health ..."
-for _ in $(seq 1 60); do
-  if curl -fsS --max-time 5 "https://${DOMAIN}/health" >/dev/null; then
-    if ! verify_dashboard_login "$DOMAIN" "$DASHBOARD_USER" "$DASHBOARD_PASS"; then
-      echo "Health check passed, but dashboard login self-check failed." >&2
-      echo "Restart backend and inspect auth logs with: docker compose logs -f backend" >&2
-      exit 1
-    fi
-    echo "Dashboard credentials verified."
-    echo "Usalp is ready: https://${DOMAIN}"
-    exit 0
-  fi
-  sleep 5
-done
-
-echo "Containers started, but health check did not become ready within 5 minutes." >&2
-echo "Check logs with: docker compose logs -f caddy backend" >&2
-exit 1
+wait_for_ready_and_verify "$DOMAIN" "$DASHBOARD_USER" "$DASHBOARD_PASS"

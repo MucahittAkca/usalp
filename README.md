@@ -47,6 +47,17 @@ servis edilir:
 - Health: `https://domain/health`
 - API: `https://domain/api/v1`
 
+Browser'dan girişte 401 alınıyorsa backend çalışıyor ama browser'dan gönderilen
+bilgiler kurulumda girilen bilgilerle eşleşmiyor demektir. Kullanıcı adı
+büyük/küçük harfe duyarlıdır; setup script'i görünmez boşluk kaynaklı hataları
+engellemek için kullanıcı adını sınırlar ve şifrenin başında/sonunda boşluk
+kabul etmez. Tek komutla yeni dashboard kullanıcı adı/şifresi üretip backend
+üzerinden doğrulamak için:
+
+```bash
+./scripts/setup-prod.sh --reset-dashboard-password
+```
+
 Geliştirme modunda hot reload ve localhost HTTP için:
 
 ```bash

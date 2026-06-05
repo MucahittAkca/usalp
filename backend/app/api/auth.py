@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 
@@ -12,6 +13,7 @@ from app.core.security import create_access_token, verify_password
 from app.schemas.auth import TokenRequest, TokenResponse
 
 router = APIRouter(tags=["auth"])
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -24,13 +26,18 @@ class _LoginAttempt:
 _attempts: dict[str, _LoginAttempt] = {}
 
 
-def _client_key(request: Request, username: str) -> str:
-    """IP + kullanıcı adı bazlı rate-limit anahtarı üretir."""
+def _client_ip(request: Request) -> str:
+    """İstekten güvenilir log/rate-limit IP değerini çıkarır."""
     forwarded_for = request.headers.get("x-forwarded-for", "")
     client_ip = forwarded_for.split(",", 1)[0].strip()
     if not client_ip and request.client:
         client_ip = request.client.host
-    return f"{client_ip or 'unknown'}:{username.lower()}"
+    return client_ip or "unknown"
+
+
+def _client_key(request: Request, username: str) -> str:
+    """IP + kullanıcı adı bazlı rate-limit anahtarı üretir."""
+    return f"{_client_ip(request)}:{username.lower()}"
 
 
 def _check_rate_limit(key: str) -> None:
@@ -70,19 +77,37 @@ def _record_login_success(key: str) -> None:
     _attempts.pop(key, None)
 
 
+def _has_outer_whitespace(value: str) -> bool:
+    """Başta/sonda görünmez boşluk olup olmadığını güvenli loglamak için döner."""
+    return value != value.strip()
+
+
 @router.post("/auth/token", response_model=TokenResponse)
 async def login(body: TokenRequest, request: Request) -> TokenResponse:
     """Kullanıcı adı/şifre ile JWT token üretir (tek kullanıcı, MVP)."""
     attempt_key = _client_key(request, body.username)
     _check_rate_limit(attempt_key)
 
+    username_ok = body.username == settings.DASHBOARD_USERNAME
     password_ok = (
         verify_password(body.password, settings.DASHBOARD_PASSWORD_HASH)
         if settings.DASHBOARD_PASSWORD_HASH
         else body.password == settings.DASHBOARD_PASSWORD
     )
-    if body.username != settings.DASHBOARD_USERNAME or not password_ok:
+    if not username_ok or not password_ok:
         _record_login_failure(attempt_key)
+        logger.warning(
+            "Dashboard login failed: client_ip=%s username_match=%s password_match=%s "
+            "supplied_username_length=%d configured_username_length=%d "
+            "username_has_outer_whitespace=%s password_has_outer_whitespace=%s",
+            _client_ip(request),
+            username_ok,
+            password_ok,
+            len(body.username),
+            len(settings.DASHBOARD_USERNAME),
+            _has_outer_whitespace(body.username),
+            _has_outer_whitespace(body.password),
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",

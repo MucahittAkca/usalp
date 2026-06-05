@@ -15,16 +15,25 @@ export default function LoginPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    const normalizedUsername = username.trim();
+
+    if (!normalizedUsername) {
+      setError("Kullanıcı adı boş olamaz.");
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
     try {
-      const res = await api.auth.login({ username, password });
+      const res = await api.auth.login({ username: normalizedUsername, password });
       setToken(res.access_token);
       router.push("/");
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
-        setError("Kullanıcı adı veya şifre hatalı.");
+        setError(
+          "Kullanıcı adı veya şifre hatalı. Kurulumda girilen değerler birebir eşleşmeli. Emin değilseniz sunucuda ./scripts/setup-prod.sh --reset-dashboard-password çalıştırın.",
+        );
       } else if (err instanceof ApiError && err.status === 429) {
         setError("Çok fazla başarısız giriş denemesi. Birkaç dakika sonra tekrar deneyin.");
       } else {
@@ -66,6 +75,9 @@ export default function LoginPage() {
                 type="text"
                 required
                 autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"

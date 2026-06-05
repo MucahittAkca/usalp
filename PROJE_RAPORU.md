@@ -330,6 +330,15 @@ Bu script `.env` dosyası oluşturur, secret değerleri hazırlar, dashboard
 şifresini hash'ler, DNS/port/outbound HTTPS kontrollerini yapar ve Docker
 Compose ile sistemi ayağa kaldırır.
 
+Kurulum sonrası browser login 401 dönüyorsa backend erişilebilir durumdadır,
+ancak browser'dan gönderilen kullanıcı adı/şifre kurulumdaki değerlerle
+eşleşmiyordur. Dashboard şifresi tek komutla sıfırlanıp backend üzerinden
+doğrulanabilir:
+
+```bash
+./scripts/setup-prod.sh --reset-dashboard-password
+```
+
 Gerçek AI analizi için production sunucusundaki `.env` dosyasına
 `LLM_API_KEY` eklenir ve backend yeniden oluşturulur:
 
