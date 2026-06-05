@@ -28,7 +28,7 @@ Kalıcı production için domain kullanılması önerilir. Geçici testte kendi 
 yoksa public IP'yi çözen `sslip.io` formatı kullanılabilir:
 
 ```text
-167.233.57.73.sslip.io
+[ip-adresi].sslip.io
 ```
 
 ```bash
